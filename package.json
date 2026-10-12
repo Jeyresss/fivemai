@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "test": "node --test tests/*.test.js",
-    "check": "node --check server/index.js && node --check server/core.js && node --check web/app.js"
+    "check": "node --check server/index.js && node --check server/core.js && node --check server/profiles.js && node --check server/jobs.js && node --check web/app.js"
   },
   "dependencies": {
     "ws": "8.18.3"

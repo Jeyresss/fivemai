@@ -5,6 +5,12 @@ class PushToTalk {
     this.ready=false;this.held=false;this.recording=false;this.pending=false;this.generating=false;this.playing=false;this.releaseTimer=null;this.ackTimer=null;
     track.enabled=false;
   }
+  static proximityVolume(distance,full=3,max=18){
+    if(!Number.isFinite(distance) || !Number.isFinite(full) || !Number.isFinite(max) || max<=full)return 0;
+    if(distance<=full)return 1;
+    if(distance>=max)return 0;
+    return Math.pow((max-distance)/(max-full),2);
+  }
   static audioStats(report){
     let level=null,bytes=null;
     for(const item of report.values()){
@@ -140,6 +146,7 @@ async function connect(npc,microphone){
 }
 window.addEventListener('message',async({data})=>{
   if(data.type==='open')void connect(data.npc,data.microphone);
+  if(data.type==='proximity')$('voice').volume=PushToTalk.proximityVolume(data.distance,data.fullDistance,data.maxDistance);
   if(data.type==='microphones')void microphones(data.index);
   if(data.type==='ptt'){
     held=Boolean(data.held);

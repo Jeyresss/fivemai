@@ -17,7 +17,8 @@
         "y": -133.5,
         "z": 39.0,
         "heading": 70
-      }
+      },
+      "jobId": "mechanic"
     },
     {
       "id": "lea_moreau",
@@ -33,7 +34,44 @@
         "y": -213.0,
         "z": 37.65,
         "heading": 200
-      }
+      },
+      "jobId": "journalist"
+    }
+  ],
+  "voiceFullDistance": 3,
+  "voiceMaxDistance": 18,
+  "ambientNPCs": true,
+  "maxProfiles": 5000,
+  "jobs": [
+    {
+      "id": "resident",
+      "label": "Habitant de Los Santos",
+      "models": []
+    },
+    {
+      "id": "mechanic",
+      "label": "Mécanicien",
+      "models": [
+        "s_m_y_xmech_01",
+        "s_m_y_xmech_02",
+        "s_m_m_autoshop_01",
+        "s_m_m_autoshop_02"
+      ]
+    },
+    {
+      "id": "journalist",
+      "label": "Journaliste",
+      "models": []
+    },
+    {
+      "id": "driver",
+      "label": "Chauffeur",
+      "models": []
+    },
+    {
+      "id": "shopkeeper",
+      "label": "Commerçant",
+      "models": []
     }
   ]
 }

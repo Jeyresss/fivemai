@@ -1,59 +1,118 @@
-# fivemai — PNJ vocaux avec OpenAI Realtime
+# fivemai — PNJ vocaux, profils persistants et métiers
 
-Première ressource autonome FiveM. Deux PNJ configurés ont chacun prénom, nom, métier, histoire, personnalité et voix. Conversation audio bidirectionnelle WebRTC avec `gpt-realtime`, prise de parole à touche maintenue et interruption. Aucun service de transcription ni conversion texte → voix n’est utilisé. Les descriptions et souvenirs sont du texte de contexte; l’API peut émettre des événements textuels de sortie, qui ne servent pas à produire la voix.
+Ressource autonome FiveM. Conversations vocales bidirectionnelles WebRTC avec `gpt-realtime`, sans pipeline de transcription ni synthèse à partir de texte. Les biographies, souvenirs et outils métier sont du contexte textuel; la voix passe directement par OpenAI Realtime.
 
-## Installation
+## Installation et mise à jour
 
-Prérequis : FXServer récent avec Node 22, OneSync activé, compte OpenAI autorisé pour Realtime et facturation active. Le client FiveM doit réellement autoriser `getUserMedia` dans sa NUI. **Cette compatibilité microphone n’a pas été validée dans le cloud** : si le client refuse la capture, cette version ne fournit pas de conversation vocale. Une passerelle audio externe serait alors nécessaire; aucun contournement par transcription n’est prévu.
+FXServer récent avec Node 22, OneSync, accès OpenAI Realtime et facturation active. Placer le checkout dans `resources/[local]/fivemai`, avec `fxmanifest.lua` directement à la racine, puis :
 
-1. Placer le dossier dans `resources/[local]/fivemai` (le nom de ressource doit être `fivemai`).
-2. Dans ce dossier : `npm ci --ignore-scripts`, puis `npm test` et `npm run check`.
-3. Définir la convar **serveur uniquement** `fivemai_openai_key` dans un fichier privé de configuration FXServer, hors dépôt. Utiliser `set`, jamais `setr` ou `sets`. Ne pas mettre la clé dans `config.json`, les fichiers NUI ou Git. Exemple de syntaxe avec valeur fictive : `set fivemai_openai_key "VOTRE_CLE_PRIVEE"`.
-4. Charger ce fichier privé via `exec` dans `server.cfg`, activer OneSync (`set onesync on`), puis `ensure fivemai`.
-5. Autoriser HTTPS et WebSocket vers `api.openai.com` sur le serveur et la connectivité WebRTC OpenAI sur les clients. WebRTC peut nécessiter UDP/TURN selon le réseau; une simple règle HTTP ne garantit pas la voix.
+```bash
+npm ci --ignore-scripts
+npm test
+npm run check
+```
 
-Approcher Marcel (-341.7, -133.5, 39.0) ou Léa (-537.5, -213.0, 37.65). Maintenir **N** pour parler, puis relâcher pour demander la réponse vocale. Aucun menu ni curseur : seul un petit indicateur affiche la connexion, la prise de parole et les erreurs. À la première pression, attendre le message « Connecté » avant de parler; la voix prononcée pendant la connexion n’est pas conservée. La touche est modifiable dans **Paramètres → Assignation des touches → FiveM → Maintenir pour parler au PNJ (IA)**. Une nouvelle pression interrompt la réponse. S’éloigner ferme la session; le serveur limite aussi sa durée. Le micro est coupé hors de la prise de parole. L’indicateur précise que la voix est une IA. Le micro GTA et celui de la NUI peuvent fonctionner simultanément : configurer votre chat vocal pour éviter que les autres joueurs entendent une conversation privée.
+Dans une configuration serveur privée, hors Git :
 
-## Identités et mémoire
+```cfg
+set fivemai_openai_key "VOTRE_CLE_PRIVEE"
+```
 
-Modifier `config.json` pour ajouter des PNJ avec un `id` stable, un modèle GTA valide, des coordonnées et une biographie distincte. Cette version fait apparaître des PNJ fixes locaux, dans le bucket principal; elle n’attribue pas automatiquement une identité à chaque passant ambiant. Les dialogues sont individuels; les autres joueurs n’entendent pas cette voix. Les émotions sont guidées par le contexte et les instructions, sans garantie de cohérence psychologique parfaite.
+Charger cette configuration avant `ensure fivemai` dans `server.cfg`. Utiliser `set`, jamais `setr` ou `sets`. Activer OneSync :
 
-La mémoire est stockée dans `data/memory.json`, indexée par licence FiveM et ID de PNJ. Les faits durables de conversation sont enregistrés via un outil traité sur une connexion OpenAI sideband authentifiée côté serveur. Ce sont des souvenirs sélectionnés par le modèle, pas un enregistrement exhaustif : 100 entrées récentes par paire, 30 fournies au démarrage, maximum 20 écritures par session. Sauvegarder ce dossier entre déploiements. Les données ne sont pas chiffrées; limiter les droits et définir votre politique de conservation. Supprimer les entrées d’une licence, serveur arrêté, pour effacer sa mémoire.
+```cfg
+set onesync on
+ensure fivemai
+```
 
-Les autres scripts de jeu doivent transmettre leurs événements **depuis le serveur**, après validation du gameplay. Aucun client ne peut déclarer directement un vol via un événement réseau de cette ressource. Exemple Lua, à intégrer à votre script de vol :
+Le serveur doit pouvoir joindre `api.openai.com` en HTTPS et WebSocket. Les clients doivent disposer de la connectivité WebRTC OpenAI; une règle HTTP seule ne garantit pas le passage de l’audio.
+
+Pour mettre à jour, dans le dossier de la ressource : `git pull --ff-only origin main`, puis `npm ci --ignore-scripts`. Dans la console FXServer : `restart fivemai`. Sauvegarder `data/` avant changement de serveur ou redéploiement. Si `config.json` a été personnalisé, conserver ces modifications et résoudre explicitement les éventuels conflits Git.
+
+## Parler et entendre à proximité
+
+Approcher un PNJ humain vivant, maintenir **N** et parler après « Connecté ». Relâcher pour demander sa réponse. Une nouvelle pression peut interrompre le PNJ. Aucun menu ni curseur; seul un indicateur vocal est affiché. La touche se change dans **Paramètres → Assignation des touches → FiveM → Maintenir pour parler au PNJ (IA)**.
+
+La distance d’interaction est de 3 mètres. La voix est à plein volume jusqu’à `voiceFullDistance` (3 m), baisse progressivement jusqu’à `voiceMaxDistance` (18 m), puis devient inaudible. **S’éloigner ne ferme plus la connexion ni la lecture**. Si le PNJ parle encore quand vous revenez, vous entendez la suite de sa phrase, sans rejouer l’audio manqué. Le microphone est coupé lorsque vous ne maintenez pas la touche et lorsque vous quittez la portée d’interaction.
+
+La conversation reste individuelle : l’atténuation est calculée pour l’interlocuteur; les autres joueurs ne reçoivent pas encore la voix du PNJ. La session se termine à sa durée maximale (180 s), à la déconnexion, au changement de bucket, à la disparition réelle du PNJ réseau ou à un changement de personnage. Ces limites restent différentes de la portée d’écoute.
+
+Deux personnages de démonstration restent disponibles : Marcel (-341.7, -133.5, 39.0) et Léa (-537.5, -213.0, 37.65). Mettre `npcs: []` dans la configuration pour ne garder que les passants.
+
+## Profils des passants
+
+Avec `ambientNPCs: true`, la ressource recherche le PNJ humain vivant le plus proche parmi les peds chargés. À la première interaction, le serveur lui attribue prénom, nom, métier, personnalité, voix et biographie procédurale distincte. Les profils sont enregistrés dans `data/profiles.json`. Leur création locale ne nécessite pas un appel OpenAI supplémentaire. La limite `maxProfiles` est de 5 000; au-delà, la création est refusée plutôt que de supprimer silencieusement des personnages.
+
+Les humains réseau peuvent partager leur identité entre joueurs. Une seule conversation active est autorisée par personnage. Les joueurs et les animaux sont exclus. Les PNJ purement locaux doivent pouvoir être enregistrés en réseau; si FiveM refuse cette opération, la conversation est refusée avec un diagnostic F8. Les scripts qui limitent la population ou le contrôle des entités peuvent nécessiter une intégration.
+
+Un identifiant de ped ou de réseau n’est pas une identité durable après suppression/recréation. Le profil et ses souvenirs restent stockés, mais un nouveau passant reçoit un nouveau profil. Pour vos personnages récurrents, votre script de spawn doit conserver l’ID de profil et le rattacher après recréation, via cet export **serveur** :
 
 ```lua
--- playerSource : voleur confirmé; témoins déterminés par votre script serveur.
+exports['fivemai']:BindNPCProfile(networkId, profileId)
+local profile = exports['fivemai']:GetNPCProfile(profileId)
+```
+
+Le serveur n’adopte pas une identité simplement déclarée par le client. Les deux PNJ fixes de démonstration restent des peds locaux, dans le bucket principal.
+
+## Mémoire et perception
+
+`data/memory.json` conserve les faits sélectionnés par le modèle, séparés par licence FiveM et personnage : 100 entrées récentes par paire. Chaque session reçoit jusqu’à 20 souvenirs relationnels et 10 observations publiques du PNJ. Les outils sont traités sur une connexion OpenAI sideband authentifiée côté serveur. Ce n’est pas un enregistrement exhaustif des conversations.
+
+Vos scripts serveur doivent transmettre les événements qu’un PNJ a réellement vus ou entendus. Ils déterminent les témoins, la visibilité, les obstacles et les rumeurs; cette ressource ne détecte pas automatiquement tous les vols.
+
+```lua
+-- Mémoire du PNJ concernant ce joueur précis.
 exports['fivemai']:RecordEvent(playerSource, {
     description = 'Marcel a vu ce joueur voler une voiture rouge devant son garage.',
     witnesses = { 'marcel_dubois' }
 })
+
+-- Observation publique propre au PNJ, accessible dans ses futures conversations.
+exports['fivemai']:RecordNPCEvent('marcel_dubois', 'Une voiture rouge a été volée devant le garage.')
 ```
 
-Seuls les témoins listés apprennent l’événement. Votre intégration doit déterminer visibilité, distance, obstacles et rumeurs : la ressource ne détecte pas elle-même tous les vols. Ne jamais convertir cet export en relais réseau acceptant des descriptions arbitraires du client. Pour une information entendue, l’indiquer explicitement comme rumeur. Les événements pendant une conversation sont ajoutés au contexte sans forcer une réplique immédiate.
+Ne jamais relayer directement une description arbitraire du client vers ces exports. Qualifier une information entendue de rumeur, sans la transformer en observation certaine. Les émotions sont guidées par la personnalité et les souvenirs; leur cohérence parfaite ne peut pas être garantie.
 
-## Limites et sécurité
+## Premier métier : mécanicien
 
-Clé serveur, SDP transmis via événements FiveM, connexion WebRTC directe au fournisseur. Vérification serveur de proximité et du bucket, une session par joueur, huit simultanées, délai de dix secondes entre ouvertures, durée maximale de trois minutes. Le coût reste lié à la facturation OpenAI; définir aussi des budgets côté fournisseur. Le client contrôle sa connexion WebRTC et peut altérer ses instructions : les souvenirs de conversation sont à considérer comme non fiables, jamais comme preuve d’un crime ni comme autorisation de paiement, inventaire ou sanction. Aucune action de gameplay n’est confiée au modèle.
+Le métier `mechanic` expose deux outils Realtime : établir un devis, puis effectuer un service après accord oral explicite. Marcel est mécanicien; les modèles de mécaniciens listés dans `jobs[].models` reçoivent également ce métier. Les autres passants reçoivent un métier de la liste. Un métier narratif sans outils ne peut pas encore agir.
 
-Le JSON convient à un prototype mono-instance; un serveur chargé nécessitera une base de données, une politique de rétention et une meilleure gestion des écritures. Aucune clé ni FXServer n’est présent dans la machine cloud, donc aucun appel vocal réel ni démarrage FiveM n’a été validé.
+Services disponibles : réparation et peinture (rouge, bleu, noir, blanc, vert, jaune, orange, violet). **Ils sont gratuits dans ce prototype**, sans portefeuille, retrait d’argent ni intégration économique.
 
-## Vérification en jeu requise
+Pour tester : conduire votre voiture à côté de Marcel, rester au volant, puis dire « Peux-tu réparer ma voiture ? ». Accepter le devis à voix haute. Le serveur vérifie la session, la proximité, le conducteur, le véhicule, l’expiration du devis et son usage unique. Il attend quatre secondes, revalide les conditions, puis autorise les natives côté client sur ce véhicule. Le client confirme le résultat; la mémoire n’enregistre une réussite qu’après confirmation. Le PNJ joue une animation si le client dispose du contrôle de son ped. Il ne se déplace pas encore autour du véhicule.
 
-- Vérifier apparition des deux PNJ, refus à distance et accès au microphone.
-- Maintenir la touche pendant une question, la relâcher, entendre la réponse puis interrompre le PNJ avec une nouvelle pression. Vérifier aussi le changement de touche dans les paramètres.
-- Dire un fait durable, terminer, reconnecter et vérifier le souvenir, y compris après redémarrage du serveur.
-- Enregistrer un événement via un script serveur : seul le témoin doit le connaître; un autre joueur ne doit pas partager cette mémoire.
-- Vérifier fermeture à distance, déconnexion, durée limite, erreurs OpenAI et arrêt de ressource.
+Le conducteur doit rester au volant et à portée pendant l’intervention. Être conducteur ne prouve pas la propriété économique d’un véhicule : les clés, garages et permissions de votre serveur devront être intégrés avant d’ajouter des transactions. La confirmation vocale est interprétée par le modèle, pas par une preuve indépendante du serveur. Le résultat natif reste confirmé par le client; il ne doit pas déclencher une récompense ou un paiement sans vérification supplémentaire.
 
-Les tests cloud couvrent persistance, isolation des mémoires, rétention, requêtes API, activation du micro et séquence commit audio → réponse; ils ne remplacent pas ces vérifications.
+Les PNJ fixes utilisent `jobId` dans `config.json`. Un script serveur peut attribuer un métier à un profil ambiant inactif :
 
-Si le PNJ reste silencieux : vérifier que l’indicateur passe à « Connecté », puis « Le PNJ vous écoute » pendant la pression et « Le PNJ prépare sa réponse » après relâchement. Les erreurs de microphone, de lecture, de connexion et les refus OpenAI sont affichés et envoyés dans F8. Vérifier le microphone par défaut de Windows et ses autorisations. Le fait que la création de l’appel réussisse ne prouve pas que le navigateur capture du son ni que le réseau transporte l’audio.
+```lua
+exports['fivemai']:AssignNPCJob(profileId, 'mechanic')
+```
 
-### Microphone silencieux ou mauvais périphérique (Windows)
+Les métiers sont définis dans `server/jobs.js` via `JobRegistry`. Un script serveur JavaScript peut appeler `RegisterJob` avec `{id, label, tools, execute}` : `tools` contient les schémas Realtime; `execute(name, context, args)` réalise des validations serveur et retourne un résultat, éventuellement asynchrone. Les fonctions viennent de scripts serveur de confiance, jamais de code fourni par l’IA. Prévoir un identifiant et un libellé dans la configuration pour la génération automatique de ce métier.
 
-L’indicateur affiche le niveau du micro pendant la touche maintenue, quand Chromium expose ces statistiques. F8 affiche le périphérique réellement utilisé, le niveau maximum et les octets audio envoyés. Un appel accepté ou des octets envoyés ne garantissent pas un signal vocal : WebRTC peut envoyer du silence. Un niveau non disponible ne signifie pas un niveau nul.
+## Microphone Windows
 
-Dans **F8** (sans menu) : `pnjmicro` liste les entrées audio Windows. `pnjmicro 2` sélectionne par exemple la deuxième entrée; utilisez le numéro de votre microphone dans la liste. Éloignez-vous du PNJ pour fermer la connexion, puis revenez et maintenez la touche pour reconnecter. Le choix est conservé localement sur ce client FiveM. `pnjmicro default` revient au périphérique Windows par défaut. Le réglage du micro dans le chat vocal GTA/FiveM ne change pas nécessairement le micro de la NUI. Si le périphérique disparaît, resélectionnez-le ou revenez au défaut; la capture ne bascule pas silencieusement vers un autre appareil.
+La NUI utilise un périphérique Windows qui peut différer du micro du chat vocal GTA. Dans **F8**, sans menu :
 
-Vérifier aussi le signal dans Windows → Système → Son → Entrée et les autorisations microphone des applications de bureau. Parler seulement après « Connecté ». Ces diagnostics et la sélection d’appareil ne garantissent pas la capture sur chaque build FiveM : les statistiques et le test en jeu permettent de localiser le problème restant.
+- `pnjmicro` liste les entrées audio.
+- `pnjmicro 2` sélectionne la deuxième entrée de cette liste et ferme la session courante pour appliquer le choix à la prochaine connexion.
+- `pnjmicro default` restaure le défaut Windows.
+
+Relâcher puis maintenir la touche pour reconnecter. Le choix est conservé localement. Vérifier le signal dans **Windows → Système → Son → Entrée** et les autorisations microphone des applications de bureau.
+
+L’indicateur affiche le niveau lorsque Chromium expose cette statistique. F8 indique le microphone, le niveau maximum et les octets audio envoyés. Des paquets audio peuvent contenir du silence; un niveau indisponible ne signifie pas un niveau nul. Les erreurs de microphone, de lecture et d’OpenAI sont également affichées.
+
+## Vérifications et limites
+
+Les tests cloud vérifient la logique de prise de parole, l’atténuation/reprise du volume, la persistance des profils, l’isolation des mémoires et les validations des métiers. Les nouvelles fonctions ne sont pas validées sur un FXServer dans le cloud. Le fonctionnement vocal de la version précédente a été confirmé par l’utilisateur sur son serveur.
+
+Tests en jeu à réaliser après mise à jour :
+
+1. Pendant une longue réponse, s’éloigner au-delà de 18 m et revenir avant la fin : entendre la suite sans nouvelle connexion.
+2. Rencontrer deux passants : identités distinctes; retrouver le même ped : profil et souvenir conservés. Avec un second joueur, vérifier la même identité et le refus si le PNJ est occupé.
+3. Vérifier que disparition/recréation d’un passant ne réutilise pas l’identité par accident; tester `BindNPCProfile` pour un personnage récurrent.
+4. Au volant près de Marcel : demander une réparation et une peinture, accepter le devis, vérifier les changements réels. Tester aussi refus, départ pendant l’intervention et absence de réussite annoncée après échec.
+5. Vérifier microphone, erreurs réseau, déconnexion, changement de bucket, durée limite et arrêt de ressource.
+
+Le JSON convient à un prototype mono-instance. Sauvegarder `data/`, limiter les droits d’accès et définir une politique de conservation; les fichiers ne sont pas chiffrés. Le serveur limite les sessions simultanées à huit et les ouvertures à une toutes les dix secondes par joueur. Les processus Realtime sont à redémarrer après un redéploiement; les données conservées ne sauvegardent pas les appels actifs.

@@ -27,3 +27,8 @@ test('microphone stats distinguish real input from transport and missing statist
  assert.deepEqual(PushToTalk.audioStats(new Map([['mic',{type:'media-source',kind:'audio',audioLevel:0}],['rtp',{type:'outbound-rtp',kind:'audio',bytesSent:2500}]])),{level:0,bytes:2500});
  assert.deepEqual(PushToTalk.audioStats(new Map([['mic',{type:'media-source',kind:'audio',audioLevel:0.25}],['rtp',{type:'outbound-rtp',kind:'audio',bytesSent:3000}],['video',{type:'outbound-rtp',kind:'video',bytesSent:500000}]])),{level:0.25,bytes:3000});
 });
+
+test('proximity volume fades, mutes at range and restores when returning',()=>{
+ assert.equal(PushToTalk.proximityVolume(2),1);assert.equal(PushToTalk.proximityVolume(18),0);assert.equal(PushToTalk.proximityVolume(40),0);
+ assert.ok(PushToTalk.proximityVolume(6)>PushToTalk.proximityVolume(12));assert.equal(PushToTalk.proximityVolume(2),1);assert.equal(PushToTalk.proximityVolume(NaN),0);
+});

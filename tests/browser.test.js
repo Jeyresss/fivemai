@@ -37,3 +37,9 @@ test('F8 microphone selection saves the chosen device and stops temporary captur
  const selection=s.requests.find(r=>r[0]==='https://fivemai/microphone');
  assert.equal(selection[1].deviceId,'headset-id');assert.equal(s.track.stopped,true);
 });
+
+test('walking out of hearing range mutes playback without closing the audio stream',async()=>{
+ const s=browser();await s.event({type:'open',npc:{id:'marcel_dubois',name:'Marcel'}});await tick();
+ await s.event({type:'proximity',distance:30,fullDistance:3,maxDistance:18});assert.equal(s.elements.get('voice').volume,0);assert.equal(s.track.stopped,false);
+ await s.event({type:'proximity',distance:2,fullDistance:3,maxDistance:18});assert.equal(s.elements.get('voice').volume,1);assert.equal(s.requests.some(r=>r[0]==='https://fivemai/close'),false);
+});
