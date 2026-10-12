@@ -1,6 +1,6 @@
 # fivemai — PNJ vocaux avec OpenAI Realtime
 
-Première ressource autonome FiveM. Deux PNJ configurés ont chacun prénom, nom, métier, histoire, personnalité et voix. Conversation audio bidirectionnelle WebRTC avec `gpt-realtime`, détection des tours de parole et interruption. Aucun service de transcription ni conversion texte → voix n’est utilisé. Les descriptions et souvenirs sont du texte de contexte; l’API peut émettre des événements textuels de sortie, qui ne servent pas à produire la voix.
+Première ressource autonome FiveM. Deux PNJ configurés ont chacun prénom, nom, métier, histoire, personnalité et voix. Conversation audio bidirectionnelle WebRTC avec `gpt-realtime`, prise de parole à touche maintenue et interruption. Aucun service de transcription ni conversion texte → voix n’est utilisé. Les descriptions et souvenirs sont du texte de contexte; l’API peut émettre des événements textuels de sortie, qui ne servent pas à produire la voix.
 
 ## Installation
 
@@ -12,7 +12,7 @@ Prérequis : FXServer récent avec Node 22, OneSync activé, compte OpenAI autor
 4. Charger ce fichier privé via `exec` dans `server.cfg`, activer OneSync (`set onesync on`), puis `ensure fivemai`.
 5. Autoriser HTTPS et WebSocket vers `api.openai.com` sur le serveur et la connectivité WebRTC OpenAI sur les clients. WebRTC peut nécessiter UDP/TURN selon le réseau; une simple règle HTTP ne garantit pas la voix.
 
-Approcher Marcel (-341.7, -133.5, 39.0) ou Léa (-537.5, -213.0, 37.65), appuyer sur E (ou `/parlerpnj`), puis cliquer sur « Activer le microphone ». Échap termine la conversation. La fenêtre indique explicitement que la voix est une IA. Le micro GTA et celui de la NUI peuvent fonctionner simultanément : configurer votre chat vocal pour éviter que les autres joueurs entendent une conversation privée.
+Approcher Marcel (-341.7, -133.5, 39.0) ou Léa (-537.5, -213.0, 37.65). Maintenir **N** pour parler, puis relâcher pour demander la réponse vocale. Aucun menu ni curseur : seul un petit indicateur affiche la connexion, la prise de parole et les erreurs. À la première pression, attendre le message « Connecté » avant de parler; la voix prononcée pendant la connexion n’est pas conservée. La touche est modifiable dans **Paramètres → Assignation des touches → FiveM → Maintenir pour parler au PNJ (IA)**. Une nouvelle pression interrompt la réponse. S’éloigner ferme la session; le serveur limite aussi sa durée. Le micro est coupé hors de la prise de parole. L’indicateur précise que la voix est une IA. Le micro GTA et celui de la NUI peuvent fonctionner simultanément : configurer votre chat vocal pour éviter que les autres joueurs entendent une conversation privée.
 
 ## Identités et mémoire
 
@@ -41,9 +41,11 @@ Le JSON convient à un prototype mono-instance; un serveur chargé nécessitera 
 ## Vérification en jeu requise
 
 - Vérifier apparition des deux PNJ, refus à distance et accès au microphone.
-- Poser oralement une question, entendre la réponse, puis interrompre le PNJ.
+- Maintenir la touche pendant une question, la relâcher, entendre la réponse puis interrompre le PNJ avec une nouvelle pression. Vérifier aussi le changement de touche dans les paramètres.
 - Dire un fait durable, terminer, reconnecter et vérifier le souvenir, y compris après redémarrage du serveur.
 - Enregistrer un événement via un script serveur : seul le témoin doit le connaître; un autre joueur ne doit pas partager cette mémoire.
 - Vérifier fermeture à distance, déconnexion, durée limite, erreurs OpenAI et arrêt de ressource.
 
-Les tests cloud couvrent persistance, isolation des mémoires, rétention et configuration audio; ils ne remplacent pas ces vérifications.
+Les tests cloud couvrent persistance, isolation des mémoires, rétention, requêtes API, activation du micro et séquence commit audio → réponse; ils ne remplacent pas ces vérifications.
+
+Si le PNJ reste silencieux : vérifier que l’indicateur passe à « Connecté », puis « Le PNJ vous écoute » pendant la pression et « Le PNJ prépare sa réponse » après relâchement. Les erreurs de microphone, de lecture, de connexion et les refus OpenAI sont affichés et envoyés dans F8. Vérifier le microphone par défaut de Windows et ses autorisations. Le fait que la création de l’appel réussisse ne prouve pas que le navigateur capture du son ni que le réseau transporte l’audio.
