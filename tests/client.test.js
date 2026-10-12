@@ -51,9 +51,9 @@ function NetworkGetEntityIsNetworked()return true end
 function NetworkRegisterEntityAsNetworked()end
 function NetworkGetNetworkIdFromEntity()return 101 end
 `;
-function run(assertions,{ready=true}={}){
+function run(assertions,{ready=true,setup=''}={}){
  const L=lauxlib.luaL_newstate();lualib.luaL_openlibs(L);
- const source=fixture+'\n'+fs.readFileSync(path.join(__dirname,'../client/main.lua'),'utf8')+'\nthreads[1]()\n'+(ready?'callbacks.ready({},function()end)\n':'')+assertions;
+ const source=fixture+'\n'+setup+'\n'+fs.readFileSync(path.join(__dirname,'../client/main.lua'),'utf8')+'\nthreads[1]()\n'+(ready?'callbacks.ready({},function()end)\n':'')+assertions;
  try{const code=lauxlib.luaL_dostring(L,to_luastring(source));assert.equal(code,lua.LUA_OK,code===lua.LUA_OK?undefined:to_jsstring(lua.lua_tostring(L,-1)));}finally{lua.lua_close(L);}
 }
 test('fixed NPC voice opens immediately without a resolver request',()=>run(`
@@ -406,4 +406,201 @@ gameHandlers.gameEventTriggered('CEventNetworkEntityDamage',{10,99})
 GetEntityModel=function()return 999 end
 IsPedFleeing=function()return true end
 assert(FivemAIBehavior.observe(10,99)=='afraid')
+`));
+
+const actionFixture=`
+local played,raised,cleared,fleeing=false,0,0,false
+NetworkHasControlOfEntity=function()return true end
+IsPlayerFreeAimingAtEntity=function(_,ped)return ped==10 end
+IsPedArmed=function(ped,mask)return ped==99 and mask==6 end
+ClearPedTasks=function()cleared=cleared+1 played=false end
+RequestAnimDict=function()end
+HasAnimDictLoaded=function()return true end
+TaskHandsUp=function()raised=raised+1 played=true fleeing=false end
+TaskPlayAnim=function()played=true end
+IsEntityPlayingAnim=function()return played end
+IsPedFleeing=function()return fleeing end
+TriggerServerEvent=function(name,...)table.insert(network,{name=name,args={...}})end
+commands['+fivemai_talk']()
+commands['-fivemai_talk']()
+events['fivemai:actionStart']({token='action-a',action='hands_up',npcId='marcel_dubois',durationSeconds=30,maxDistance=30,releaseAfterThreatSeconds=8})
+`;
+test('hands-up is animated and verified before action success and preserves surrender against conversation poses',()=>run(actionFixture+`
+threads[3]()
+assert(raised==1 and FivemAIBehavior.surrendered[10])
+assert(network[#network].name=='fivemai:actionResult' and network[#network].args[2]==true)
+TaskStandStill=function()error('Do not overwrite surrender')end
+assert(FivemAIBehavior.pose(10,99,true,true,false)=='surrendered')
+`));
+test('a lowered weapon before execution prevents surrender and never confirms success',()=>run(actionFixture+`
+IsPlayerFreeAimingAtEntity=function()return false end
+threads[3]()
+assert(raised==0 and not FivemAIBehavior.surrendered[10])
+assert(network[#network].name=='fivemai:actionResult' and network[#network].args[2]==false and network[#network].args[3]=='weapon')
+`));
+test('surrender ends after the player lowers the weapon and the configured grace period passes',()=>run(actionFixture+`
+threads[3]()
+IsPlayerFreeAimingAtEntity=function()return false end
+clock=clock+9000
+maintainAction()
+assert(currentAction==nil and not FivemAIBehavior.surrendered[10])
+assert(network[#network].name=='fivemai:actionEnded' and network[#network].args[2]=='released')
+`));
+test('surrender is refused when the target is armed and policy disallows it',()=>run(actionFixture+`
+IsPedArmed=function()return true end
+threads[3]()
+assert(raised==0)
+assert(network[#network].args[2]==false and network[#network].args[3]=='refused')
+`));
+test('native animation errors produce a failed action result and release the pending task',()=>run(actionFixture+`
+TaskHandsUp=function()error('Native failed')end
+threads[3]()
+assert(currentAction==nil)
+assert(network[#network].name=='fivemai:actionResult' and network[#network].args[2]==false and network[#network].args[3]=='script')
+`));
+test('a cancellation during animation loading cannot later apply or confirm surrender',()=>run(actionFixture+`
+HasAnimDictLoaded=function()return false end
+Wait=function(ms)clock=clock+ms events['fivemai:actionCancel']({token='action-a'})end
+threads[3]()
+assert(currentAction==nil and raised==0)
+for _,message in ipairs(network)do assert(not(message.name=='fivemai:actionResult' and message.args[2]==true))end
+`));
+test('native speech is suppressed only for the active actor and restored on close',()=>run(`
+configForTest.reactions={enabled=true,radius=3}
+local stops,pain={},{}
+StopPedSpeaking=function(ped,stop)table.insert(stops,{ped,stop})end
+DisablePedPainAudio=function(ped,stop)table.insert(pain,{ped,stop})end
+commands['+fivemai_talk']()
+assert(stops[1][1]==10 and stops[1][2]==true)
+callbacks.close({},function()end)
+assert(stops[#stops][1]==10 and stops[#stops][2]==false)
+assert(pain[#pain][2]==false)
+`));
+test('nearby threat can open spontaneous audio without N and keeps push-to-talk released',()=>run(`
+configForTest.reactions={enabled=true,radius=3,autoCooldownSeconds=15,cooldownSeconds=8}
+IsPlayerFreeAimingAtEntity=function(_,ped)return ped==10 end
+IsPedArmed=function(ped,mask)return ped==99 and mask==6 end
+local co=coroutine.create(threads[2])
+Wait=function(ms)clock=clock+ms coroutine.yield()end
+assert(coroutine.resume(co))
+assert(coroutine.resume(co))
+assert(sent[1].type=='open' and sent[2].type=='ptt' and sent[2].held==false)
+local offered
+TriggerServerEvent=function(name,...)if name=='fivemai:offer' then offered={...}end end
+callbacks.offer({npcId='marcel_dubois',sdp='v=0'},function()end)
+assert(offered[6].automatic==true and offered[6].reaction=='aim')
+assert(not pressed)
+`));
+test('spontaneous scan ignores distant reactions and has no idle greeting',()=>run(`
+configForTest.reactions={enabled=true,radius=1}
+IsPlayerFreeAimingAtEntity=function()return true end
+IsPedArmed=function()return true end
+assert(spontaneousTarget()==nil)
+configForTest.reactions.radius=3
+IsPlayerFreeAimingAtEntity=function()return false end
+IsPedArmed=function()return false end
+assert(spontaneousTarget()==nil)
+`));
+test('ambient sex hint follows the actual ped native',()=>run(`
+target=20
+IsPedMale=function()return false end
+commands['+fivemai_talk']()
+threads[3]()
+assert(network[1].data.sex=='female')
+`));
+test('following confirms a running GTA task rather than claiming movement merely from a calm state',()=>run(`
+NetworkHasControlOfEntity=function()return true end
+local status=7
+ClearPedTasks=function()end
+TaskFollowToOffsetOfEntity=function()end
+GetScriptTaskStatus=function()return status end
+TriggerServerEvent=function(name,...)table.insert(network,{name=name,args={...}})end
+commands['+fivemai_talk']()
+events['fivemai:actionStart']({token='follow-a',action='follow',npcId='marcel_dubois',durationSeconds=60})
+threads[3]()
+assert(network[#network].name=='fivemai:actionResult' and network[#network].args[2]==false)
+`));
+
+test('network demos are streamed from the server and never duplicated or deleted by the client',()=>run(`
+assert(network[1].name=='fivemai:demoRequest')
+NetworkDoesEntityExistWithNetworkId=function()return true end
+NetToPed=function()return 10 end
+NetworkHasControlOfEntity=function()return true end
+DeleteEntity=function()error('Shared demo must only be deleted by server')end
+events['fivemai:demos']({marcel_dubois=800})
+local co=coroutine.create(threads[2])
+Wait=function(ms)clock=clock+ms coroutine.yield()end
+assert(coroutine.resume(co))
+assert(coroutine.resume(co))
+assert(peds.marcel_dubois==10)
+gameHandlers.onResourceStop('fivemai')
+`,{setup:"configForTest.demoNetwork=true\nCreatePed=function()error('Never create a duplicate network demo on client')end"}));
+
+const vehicleActionFixture=movementFixture.slice(0,movementFixture.indexOf("events['fivemai:jobStart']"))+`
+frozen=false
+local entered,driven,occupants=0,0,{}
+GetVehicleMaxNumberOfPassengers=function()return 3 end
+IsVehicleSeatFree=function(_,seat)return occupants[seat]==nil end
+GetPedInVehicleSeat=function(_,seat)return occupants[seat] or 0 end
+TaskEnterVehicle=function(ped,vehicle,timeout,seat)entered=entered+1 occupants[seat]=ped end
+GetVehiclePedIsIn=function()return 300 end
+TaskVehicleDriveToCoordLongrange=function()driven=driven+1 end
+GetScriptTaskStatus=function()return 1 end
+TaskVehicleTempAction=function()end
+`;
+test('requested passenger boarding chooses a free seat and verifies the actual occupant',()=>run(vehicleActionFixture+`
+occupants[0]=98
+events['fivemai:actionStart']({token='board',action='enter_vehicle',npcId='marcel_dubois',vehicleNetId=44,durationSeconds=60})
+threads[3]()
+assert(entered==1 and occupants[0]==98 and occupants[1]==10)
+assert(network[#network].name=='fivemai:actionResult' and network[#network].args[1]==true)
+`));
+test('a full vehicle refuses boarding without ejecting any occupants',()=>run(vehicleActionFixture+`
+occupants[0]=98 occupants[1]=97 occupants[2]=96
+events['fivemai:actionStart']({token='board',action='enter_vehicle',npcId='marcel_dubois',vehicleNetId=44,durationSeconds=60})
+threads[3]()
+assert(entered==0 and network[#network].args[1]==false)
+`));
+test('chauffeur departure requires driver ownership, player boarding and a running driving task',()=>run(vehicleActionFixture+`
+events['fivemai:actionStart']({token='drive',action='drive',npcId='marcel_dubois',vehicleNetId=44,durationSeconds=150,destination={x=100,y=100,z=0}})
+threads[3]()
+assert(entered==1 and occupants[-1]==10 and driven==1)
+assert(network[#network].name=='fivemai:actionResult' and network[#network].args[1]==true)
+GetVehiclePedIsIn=function()return 0 end
+maintainAction()
+assert(currentAction==nil and network[#network].name=='fivemai:actionEnded')
+`));
+test('chauffeur never takes an occupied driver seat',()=>run(vehicleActionFixture+`
+occupants[-1]=99
+events['fivemai:actionStart']({token='drive',action='drive',npcId='marcel_dubois',vehicleNetId=44,durationSeconds=150,destination={x=100,y=100,z=0}})
+threads[3]()
+assert(entered==0 and driven==0 and occupants[-1]==99)
+assert(network[#network].args[1]==false)
+`));
+test('chauffeur waits for the player and refuses to drive away alone',()=>run(vehicleActionFixture+`
+GetVehiclePedIsIn=function()return 0 end
+events['fivemai:actionStart']({token='drive',action='drive',npcId='marcel_dubois',vehicleNetId=44,durationSeconds=150,destination={x=100,y=100,z=0}})
+threads[3]()
+assert(driven==0 and network[#network].args[1]==false)
+`));
+test('approaching a vehicle confirms only when the NPC actually reaches its side',()=>run(vehicleActionFixture+`
+events['fivemai:actionStart']({token='approach',action='approach_vehicle',npcId='marcel_dubois',vehicleNetId=44,durationSeconds=60})
+threads[3]()
+assert(network[#network].name=='fivemai:actionResult' and network[#network].args[1]==true)
+assert(positions[10].x==2 and positions[10].y==0 and entered==0)
+`));
+
+test('conversation inside a vehicle never replaces the occupants tasks with standing or turning',()=>run(`
+IsPedInAnyVehicle=function()return true end
+TaskStandStill=function()error('Never stand a driver up')end
+TaskTurnPedToFaceEntity=function()error('Never replace driving with a turn')end
+assert(FivemAIBehavior.pose(10,99,true,true,false)=='calm')
+`));
+test('another mechanic near the demo spawn keeps its own ambient identity with shared demos',()=>run(`
+configForTest.demoNetwork=true
+target=20
+GetEntityModel=function()return 123 end
+commands['+fivemai_talk']()
+threads[3]()
+assert(network[1].name=='fivemai:resolve')
 `));

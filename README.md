@@ -52,7 +52,48 @@ exports['fivemai']:BindNPCProfile(networkId, profileId)
 local profile = exports['fivemai']:GetNPCProfile(profileId)
 ```
 
-Le serveur n’adopte pas une identité simplement déclarée par le client. Les deux PNJ fixes de démonstration restent des peds locaux, dans le bucket principal.
+Le serveur n’adopte pas une identité simplement déclarée par le client. Avec `demoNetwork: true` (valeur par défaut), les personnages de démonstration sont créés une seule fois par le serveur, dans le bucket principal. Les clients utilisent les mêmes entités réseau; leurs positions réelles restent utilisables pendant les actions et trajets. Les autres scripts doivent éviter de supprimer ces entités.
+
+## Voix, sexe et langage
+
+Le client détecte le sexe du ped avec `IsPedMale`; les modèles connus des personnages configurés fournissent aussi cette indication. À sa création, un profil choisit une voix dans `voices.male`, `voices.female` ou `voices.unknown`, puis la conserve. Les listes peuvent être modifiées dans `config.json`; une voix explicite sur un personnage configuré reste prioritaire. La voix se choisit avant le premier audio et ne change pas pendant une session. Les émotions sont exprimées par les instructions Realtime, avec la même voix.
+
+`archetypes` associe les modèles GTA à un registre et un tempérament : gang (argot, territorial, méfiant), police (professionnel, ferme), garage (pratique, familier), bureau (soigné), chauffeur ou passant. Le langage ne dépend pas d’une origine ethnique; le sexe ne détermine pas le courage. Le profil individuel et ses souvenirs nuancent le registre. Les modèles personnalisés peuvent être ajoutés aux listes `models`. Le métier fonctionnel se choisit dans `jobs` indépendamment de ce registre.
+
+Les profils existants reçoivent ces nouveaux champs à leur prochaine résolution, sans changer leur identifiant, nom, histoire ni souvenirs. Leur voix est adaptée une fois au sexe détecté, puis persistée. Avant toute utilisation des données par cette version, le serveur copie les JSON existants vers `data/profiles.json.before-npc-actions-v1.bak` et `data/memory.json.before-npc-actions-v1.bak`, sans écraser une sauvegarde déjà présente.
+
+## Braquage et actions vocales
+
+Braquer un PNJ à proximité, maintenir N et dire **« Lève les mains »**. Le modèle appelle `npc_action`; le serveur vérifie la session, la proximité, la menace récente et le tempérament. Le client vérifie à nouveau l’arme pointée, prend le contrôle du ped et joue la reddition. Une réponse positive n’est fournie au modèle qu’après confirmation de l’animation. Le braquage seul peut déclencher une protestation, mais ne lance pas automatiquement une action via le modèle.
+
+La posture dure au maximum `actions.surrenderSeconds` (30 s) et se termine après `releaseAfterThreatSeconds` (8 s) sans arme pointée, à la mort, à une interruption réelle, au départ du joueur ou à la fermeture de session. Les personnages armés refusent par défaut (`allowArmedSurrender: false`). Si cette option est activée, le seuil de reddition du tempérament reste appliqué. Un PNJ désarmé peut être amené à arrêter sa fuite pour se rendre; une tâche de conversation ordinaire n’arrête toujours pas une fuite.
+
+Actions disponibles pour tous les métiers lorsque `actions.enabled` vaut `true` :
+
+| Demande vocale | Action réelle |
+| --- | --- |
+| « Lève les mains » | Reddition sous menace, avec vérification de l’animation |
+| « Tu peux baisser les mains », « Arrête de me suivre » | Libération de l’action gérée par la ressource |
+| « Suis-moi », « Accompagne-moi » | Suivi du joueur, jusqu’à 60 s par défaut |
+| « Va-t’en », « Fuis » | Fuite, sans remplacer un combat en cours |
+| « Va près de cette voiture » | Déplacement jusqu’au côté du véhicule |
+| « Monte dans la voiture » | Montée sur un siège passager libre, vérifiée en jeu |
+
+Avec plusieurs véhicules proches, l’IA demande la plaque. Un véhicule en mouvement ou un siège occupé est refusé; aucun occupant n’est expulsé. Les actions sont exclusives et ne se superposent pas à une intervention du mécanicien. L’expiration, le contrôle réseau refusé et les erreurs natives produisent un échec, jamais une réussite inventée. Le suivi et la fuite sont annoncés comme commencés, sans prétendre avoir déjà atteint un objectif.
+
+## Réactions spontanées et paroles natives
+
+`reactions.enabled: true` active une réaction courte à une arme pointée, une agression, une fuite ou un affrontement observé. À moins de `reactions.radius` (4 m), une réaction peut ouvrir une session sans N. Le microphone WebRTC est préparé mais sa piste reste désactivée jusqu’à la pression de la touche. Dans une session existante, les réactions utilisent le même profil et la même connexion. Le joueur garde la priorité; une réaction en attente est abandonnée lorsqu’il commence à parler. Une réaction spontanée n’a pas le droit d’appeler les outils de gameplay.
+
+Les paroles ambiantes et sons de douleur natifs du PNJ pris en charge sont désactivés localement pendant cette session, puis réactivés à sa fermeture. Le remplacement repose sur les événements et états du jeu : il ne récupère pas chaque phrase native ni ne garantit un cri au même instant. Une nouvelle connexion a une latence WebRTC/OpenAI; une connexion déjà ouverte réagit plus vite. La voix IA reste audible seulement pour l’interlocuteur, avec l’atténuation de proximité existante.
+
+Une seule session par joueur et par PNJ, huit sessions simultanées par serveur, au moins 8 s entre réactions et 15 s entre ouvertures automatiques par joueur. Une session automatique sans activité se ferme après 30 s; appuyer sur N la transforme en conversation normale. Ces paramètres se règlent dans `reactions`; les sessions automatiques utilisent aussi l’API payante.
+
+## Métier de chauffeur
+
+Le métier `driver` reçoit `driver_trip`. Les modèles `s_m_m_gentransport` et `s_m_m_trucker_01` sont associés à ce métier; il est également possible de l’assigner via `AssignNPCJob`. Demander **« Emmène-moi au garage »**, **« au commissariat »** ou **« à l’hôpital »**. Les destinations autorisées et leurs coordonnées sont définies dans `destinations`.
+
+Le chauffeur choisit le seul véhicule proche, ou demande la plaque s’il y en a plusieurs. Il doit être garé et son siège conducteur libre. Le PNJ monte, attend jusqu’à huit secondes que le joueur soit à bord, puis démarre un trajet GTA normal. Le résultat confirme le départ, pas l’arrivée. Le trajet s’arrête si le joueur descend, si une menace interrompt l’action, à la durée maximale `actions.maxTripSeconds` (150 s) ou à la fermeture de session. La navigation dépend des routes, du véhicule et des obstacles du jeu; les voyages sont gratuits dans ce prototype sans économie.
 
 ## Mémoire et perception
 
@@ -119,7 +160,7 @@ L’indicateur affiche le niveau lorsque Chromium expose cette statistique. F8 i
 
 ## Vérifications et limites
 
-Les tests cloud vérifient la logique de prise de parole, l’atténuation/reprise du volume, la persistance des profils, l’isolation des mémoires et les validations des métiers. Les nouvelles fonctions ne sont pas validées sur un FXServer dans le cloud. Le fonctionnement vocal de la version précédente a été confirmé par l’utilisateur sur son serveur.
+Les tests cloud exécutent le Lua client avec des natives simulées et le serveur avec un transport Realtime simulé. Ils vérifient les profils et leur migration, la reddition, les sièges occupés, les trajets, les réactions et leurs limites, ainsi que la logique de prise de parole, l’atténuation/reprise du volume, la persistance des profils, l’isolation des mémoires et les validations des métiers. Les nouvelles fonctions ne sont pas validées sur un FXServer dans le cloud. Le fonctionnement vocal de la version précédente a été confirmé par l’utilisateur sur son serveur.
 
 Tests en jeu à réaliser après mise à jour :
 
@@ -128,7 +169,12 @@ Tests en jeu à réaliser après mise à jour :
 3. Vérifier que disparition/recréation d’un passant ne réutilise pas l’identité par accident; tester `BindNPCProfile` pour un personnage récurrent.
 4. À pied près de Marcel et de la voiture garée : demander une réparation et une peinture, accepter le devis, vérifier les changements réels. Tester aussi choix par plaque avec plusieurs véhicules, ouverture du capot, refus et départ pendant l’intervention et absence de réussite annoncée après échec.
 5. Menacer un passant avec une arme, la baisser puis lui parler pendant sa fuite : vérifier qu’il identifie le joueur comme la menace. Tester aussi le ciblage à mains nues avant les coups, une agression et une fuite causée par un autre personnage. Vérifier que la conversation ne stoppe ni la fuite ni le combat.
-6. Vérifier microphone, erreurs réseau, déconnexion, changement de bucket, durée limite et arrêt de ressource.
+6. Rencontrer un ped féminin et un ped masculin, puis un membre de gang et un policier : vérifier la voix, le langage, leur stabilité après reconnexion et la conservation des anciens souvenirs.
+7. Braquer un passant désarmé et demander de lever les mains. Vérifier l’animation, sa tenue pendant la conversation, l’arrêt après baisse de l’arme et le refus d’un personnage armé. Tester aussi une animation interrompue et le contrôle réseau refusé.
+8. Sans appuyer sur N, braquer ou agresser un passant à moins de 4 m : réaction courte, micro désactivé, absence de paroles natives doublées et absence de répétitions continues. Maintenir N pendant sa réaction pour l’interrompre et lui parler.
+9. Demander de suivre, fuir, rejoindre une voiture et monter comme passager. Tester plusieurs plaques et tous les sièges occupés. Avec un chauffeur, demander une destination autorisée, monter à bord et vérifier la conduite réelle; essayer une destination inconnue et un siège conducteur occupé.
+10. Avec deux clients, vérifier que les personnages de démonstration ne sont pas dupliqués, que le même PNJ reste exclusif à un interlocuteur et que la fermeture d’une conversation ne supprime pas le ped partagé.
+11. Vérifier microphone, erreurs réseau, déconnexion, changement de bucket, durée limite et arrêt de ressource.
 
 Le JSON convient à un prototype mono-instance. Sauvegarder `data/`, limiter les droits d’accès et définir une politique de conservation; les fichiers ne sont pas chiffrés. Le serveur limite les sessions simultanées à huit et les ouvertures à une toutes les dix secondes par joueur. Les processus Realtime sont à redémarrer après un redéploiement; les données conservées ne sauvegardent pas les appels actifs.
 
@@ -148,8 +194,12 @@ La recherche utilise les coordonnées explicites des peds, puis une énumératio
 
 Les erreurs de microphone sans message affichent désormais leur type. Si l’identifiant enregistré d’un microphone n’est plus disponible, la NUI signale explicitement le problème, essaie le défaut Windows et efface l’ancien choix seulement si cette capture fonctionne. `pnjmicro` permet ensuite de choisir à nouveau le casque.
 
-Après mise à jour, F8 doit afficher `Version npc-capture-2`. La console txAdmin affiche aussi le chemin de la ressource chargée : vérifier que c’est le checkout où `git pull` a été exécuté si plusieurs dossiers `fivemai` existent.
+Après mise à jour, F8 doit afficher `Version npc-actions-1`. La console txAdmin affiche aussi le chemin de la ressource chargée : vérifier que c’est le checkout où `git pull` a été exécuté si plusieurs dossiers `fivemai` existent.
 
 L’arrivée devant le capot est vérifiée au sol, avec une tolérance de hauteur pour la position du corps du PNJ. F8 affiche les étapes « arrivé devant le capot », « capot ouvert », « animation lancée » et « intervention appliquée », ou la cause du refus. Une erreur native pendant la préparation est transmise au serveur au lieu de laisser la tâche bloquée.
 
 Les fonctions de comportement sont intégrées localement à `client/main.lua`; aucun chargement préalable de module global n’est nécessaire. La portée de début de conversation par défaut est de 4 m (`interactionDistance`), distincte de la portée d’écoute de 18 m.
+
+## Sauvegarde du code avant cette mise à jour
+
+La version précédente (`2fbd8f6`) est conservée dans le tag GitHub `backup-before-npc-actions-2026-10-12`. Pour inspecter cette version sans modifier le serveur : `git show backup-before-npc-actions-2026-10-12:config.json`. Le tag conserve le code suivi par Git; les données privées du serveur sont sauvegardées séparément dans `data/` comme indiqué plus haut. Pour revenir au code précédent, arrêter la ressource et effectuer `git switch --detach backup-before-npc-actions-2026-10-12`, puis redémarrer. Pour revenir à la version actuelle : `git switch main` (si votre branche de déploiement est `main`). Ne restaurer les fichiers `.bak` que ressource arrêtée, en conservant aussi les données créées depuis la mise à jour.

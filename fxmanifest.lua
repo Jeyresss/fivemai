@@ -3,7 +3,7 @@ game 'gta5'
 node_version '22'
 author 'fivemai'
 description 'Conversations vocales OpenAI Realtime avec mémoire par PNJ'
-version '0.1.0'
+version '0.2.0'
 ui_page 'web/index.html'
 files { 'web/index.html', 'web/app.js', 'web/style.css', 'config.json' }
 client_script 'client/main.lua'

@@ -24,7 +24,7 @@ class JobRegistry {
   if(!job || typeof job.id!=='string' || !Array.isArray(job.tools) || typeof job.execute!=='function')throw new Error('Métier invalide');
   if(this.jobs.has(job.id))throw new Error('Métier déjà enregistré');
   for(const tool of job.tools){
-   if(tool.type!=='function'||!tool.name||tool.name==='remember_memory')throw new Error('Outil métier invalide');
+   if(tool.type!=='function'||!tool.name||['remember_memory','npc_action','driver_trip'].includes(tool.name))throw new Error('Outil métier invalide');
    for(const current of this.jobs.values())if(current.tools.some(t=>t.name===tool.name))throw new Error('Nom outil déjà enregistré');
   }
   this.jobs.set(job.id,job);

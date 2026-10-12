@@ -15,7 +15,7 @@
       "coords": {
         "x": -341.7,
         "y": -133.5,
-        "z": 39.0,
+        "z": 39,
         "heading": 70
       },
       "jobId": "mechanic"
@@ -31,7 +31,7 @@
       "model": "a_f_y_business_02",
       "coords": {
         "x": -537.5,
-        "y": -213.0,
+        "y": -213,
         "z": 37.65,
         "heading": 200
       },
@@ -66,12 +66,157 @@
     {
       "id": "driver",
       "label": "Chauffeur",
-      "models": []
+      "models": [
+        "s_m_m_gentransport",
+        "s_m_m_trucker_01"
+      ]
     },
     {
       "id": "shopkeeper",
       "label": "Commerçant",
       "models": []
     }
-  ]
+  ],
+  "voices": {
+    "male": [
+      "cedar",
+      "ash",
+      "echo"
+    ],
+    "female": [
+      "marin",
+      "coral",
+      "shimmer"
+    ],
+    "unknown": [
+      "marin",
+      "cedar"
+    ]
+  },
+  "actions": {
+    "enabled": true,
+    "surrenderSeconds": 30,
+    "releaseAfterThreatSeconds": 8,
+    "maxFollowSeconds": 60,
+    "maxDistance": 30,
+    "allowArmedSurrender": false,
+    "maxTripSeconds": 150
+  },
+  "reactions": {
+    "enabled": true,
+    "radius": 4,
+    "cooldownSeconds": 8,
+    "autoCooldownSeconds": 15,
+    "idleSeconds": 30
+  },
+  "destinations": {
+    "garage": {
+      "label": "Garage de Los Santos",
+      "x": -341.7,
+      "y": -133.5,
+      "z": 39
+    },
+    "commissariat": {
+      "label": "Commissariat de Mission Row",
+      "x": 425.1,
+      "y": -979.5,
+      "z": 30.7
+    },
+    "hopital": {
+      "label": "Hôpital Pillbox Hill",
+      "x": 299.6,
+      "y": -584,
+      "z": 43.3
+    }
+  },
+  "archetypes": [
+    {
+      "id": "gang",
+      "label": "Membre de gang",
+      "models": [
+        "g_m_y_ballaeast_01",
+        "g_m_y_ballaorig_01",
+        "g_m_y_ballasout_01",
+        "g_f_y_ballas_01",
+        "g_m_y_famca_01",
+        "g_m_y_famdnf_01",
+        "g_m_y_famfor_01",
+        "g_f_y_families_01",
+        "g_m_y_mexgoon_01",
+        "g_m_y_mexgoon_02",
+        "g_m_y_mexgoon_03",
+        "g_f_y_vagos_01",
+        "g_m_y_lost_01",
+        "g_m_y_lost_02",
+        "g_m_y_lost_03"
+      ],
+      "register": "Langage de rue, argot français naturel, direct et territorial. Méfiance envers les inconnus; jurons possibles en conflit. Pas de caricature ni de lien avec une origine ethnique.",
+      "temperament": "defiant",
+      "surrenderThreshold": 0.85
+    },
+    {
+      "id": "police",
+      "label": "Police",
+      "models": [
+        "s_m_y_cop_01",
+        "s_f_y_cop_01",
+        "s_m_y_sheriff_01",
+        "s_f_y_sheriff_01",
+        "s_m_y_hwaycop_01"
+      ],
+      "register": "Précis, ferme, professionnel. Ton autoritaire en cas de menace, vocabulaire policier sans inventer des pouvoirs ou des actions non disponibles.",
+      "temperament": "resolute",
+      "surrenderThreshold": 0.95
+    },
+    {
+      "id": "mechanic",
+      "label": "Personnel de garage",
+      "models": [
+        "s_m_y_xmech_01",
+        "s_m_y_xmech_02",
+        "s_m_m_autoshop_01",
+        "s_m_m_autoshop_02"
+      ],
+      "register": "Franc, pratique et familier. Vocabulaire de mécanique, explications concrètes et humour discret.",
+      "temperament": "prudent",
+      "surrenderThreshold": 0.25
+    },
+    {
+      "id": "business",
+      "label": "Employé de bureau",
+      "models": [
+        "a_f_y_business_01",
+        "a_f_y_business_02",
+        "a_f_y_business_03",
+        "a_f_y_business_04",
+        "a_m_y_business_01",
+        "a_m_y_business_02",
+        "a_m_y_business_03",
+        "a_m_y_business_04"
+      ],
+      "register": "Poli et soigné, préoccupations professionnelles; phrases claires. La peur peut casser cette assurance.",
+      "temperament": "prudent",
+      "surrenderThreshold": 0.2
+    },
+    {
+      "id": "driver",
+      "label": "Chauffeur",
+      "models": [
+        "s_m_m_gentransport",
+        "s_m_m_trucker_01"
+      ],
+      "register": "Pratique, cordial, vocabulaire de conduite et connaissance des destinations autorisées. Ne prétends pas connaître une adresse absente de la configuration.",
+      "temperament": "prudent",
+      "surrenderThreshold": 0.3
+    },
+    {
+      "id": "resident",
+      "label": "Passant",
+      "models": [],
+      "register": "Français courant, spontané, selon ta personnalité et tes souvenirs.",
+      "temperament": "prudent",
+      "surrenderThreshold": 0.3
+    }
+  ],
+  "demoNetwork": true
 }

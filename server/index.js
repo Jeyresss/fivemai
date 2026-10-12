@@ -4,17 +4,23 @@ const root=GetResourcePath(GetCurrentResourceName());
 // FiveM evaluates scripts with a synthetic module at the resource root.
 const resourceRequire=require('node:module').createRequire(path.join(root,'package.json'));
 const WebSocket=resourceRequire('ws');
-const {MemoryStore,sessionConfig,distance,openAIError,modelHash,errorMessage,behaviorInstructions,validBehavior,validBehaviorCause}=resourceRequire('./server/core.js');
+const {backupData,MemoryStore,sessionConfig,distance,openAIError,modelHash,errorMessage,behaviorInstructions,validBehavior,validBehaviorCause}=resourceRequire('./server/core.js');
 const {JobRegistry,MechanicJob,ToolTurnCoordinator,selectVehicle}=resourceRequire('./server/jobs.js');
+const {enrichFixed}=resourceRequire('./server/archetypes.js');
+const {validReaction,reactionResponse}=resourceRequire('./server/reactions.js');
+const {NPCActionManager}=resourceRequire('./server/actions.js');
 const {ProfileStore}=resourceRequire('./server/profiles.js');
 const config=JSON.parse(fs.readFileSync(path.join(root,'config.json'),'utf8'));
+for(const file of ['profiles.json','memory.json'])backupData(path.join(root,'data',file));
 const memory=new MemoryStore(path.join(root,'data','memory.json'));
-const profiles=new ProfileStore(path.join(root,'data','profiles.json'),{jobs:config.jobs,maxProfiles:config.maxProfiles});
+const profiles=new ProfileStore(path.join(root,'data','profiles.json'),{jobs:config.jobs,maxProfiles:config.maxProfiles,archetypes:config.archetypes,voices:config.voices});
+const autoCooldown=new Map(),demoPeds=new Map();
 const bindings=new Map(), npcLocks=new Map(), active=new Map(), cooldown=new Map(), resolveCooldown=new Map();
 const key=()=>GetConvar('fivemai_openai_key','');
 function identity(src) { return getPlayerIdentifiers(String(src)).find(x=>x.startsWith('license:')); }
 const jobs=new JobRegistry(),pendingJobs=new Map();
 function inspectVehicle(ctx,selection={}){
+  if(ctx.session.actionState)throw new Error('Terminez l’action du PNJ avant une intervention');
   if(ctx.session.behavior&&ctx.session.behavior!=='calm')throw new Error('Ce PNJ fuit ou se bat et ne peut pas effectuer un service');
   if(active.get(ctx.src)!==ctx.session||!nearby(ctx.src,ctx.session.npc,15))throw new Error('Restez près du mécanicien');
   const npcPos=position(ctx.session.npc),playerPed=GetPlayerPed(String(ctx.src));
@@ -30,6 +36,47 @@ function inspectVehicle(ctx,selection={}){
   }
   return selectVehicle(candidates,selection);
 }
+function inspectAction(ctx,action,args){
+ if(active.get(ctx.src)!==ctx.session||!nearby(ctx.src,ctx.session.npc,10))throw new Error('Restez près de ce PNJ');
+ if([...pendingJobs.values()].some(p=>p.ctx.session===ctx.session))throw new Error('Une intervention métier est en cours');
+ const o=ctx.session.observation||{};
+ if(action==='hands_up')return {aimed:o.aimed===true,armed:o.armed===true,at:o.at||0};
+ if(!['approach_vehicle','enter_vehicle','drive'].includes(action))return {};
+ if(action==='drive'&&!Object.hasOwn(config.destinations||{},args.destination))throw new Error('Destinations disponibles: '+Object.keys(config.destinations||{}).join(', '));
+ const npcPos=position(ctx.session.npc),bucket=GetPlayerRoutingBucket(String(ctx.src));
+ const candidates=[];
+ for(const entity of GetAllVehicles()){
+  if(!DoesEntityExist(entity)||GetEntityRoutingBucket(entity)!==bucket)continue;
+  const [x,y,z]=GetEntityCoords(entity),d=distance(npcPos,{x,y,z});if(d>10)continue;
+  const netId=NetworkGetNetworkIdFromEntity(entity);if(!netId)continue;
+  candidates.push({netId,plate:GetVehicleNumberPlateText(entity).trim(),distance:d});
+ }
+ const vehicle=selectVehicle(candidates,{plate:args.plate});
+ return vehicle.needsPlate?vehicle:{vehicleNetId:vehicle.netId,plate:vehicle.plate,...(action==='drive'?{destination:config.destinations[args.destination]}:{})};
+}
+const actions=new NPCActionManager({config:config.actions,now:()=>Date.now(),inspect:inspectAction,send:(src,event,data)=>emitNet(event,src,data),changed:s=>pushBehavior(s),remember:(ctx,text)=>memory.add(ctx.session.player,ctx.session.npc.id,'action',text)});
+function sessionTools(npc){return [...actions.tools(npc.jobId),...jobs.tools(npc.jobId)];}
+onNet('fivemai:actionResult',(token,ok,reason)=>{
+ const src=Number(global.source),s=active.get(src);if(!s)return;
+ if(ok===true&&!nearby(src,s.npc,35))return actions.result(src,token,false,'distance');
+ actions.result(src,token,ok===true,reason);
+});
+onNet('fivemai:actionEnded',(token,reason)=>{
+ const src=Number(global.source),s=active.get(src),running=s&&actions.running.get(s);
+ if(!running||running.token!==token)return;
+ let text='L’action du PNJ est terminée ou interrompue.';
+ if(running.action==='drive'&&reason==='arrived'){
+  const coords=position(s.npc),destination=running.observed.destination;
+  if(coords&&distance(coords,destination)<=15){text=`Le chauffeur est arrivé à ${destination.label}.`;memory.add(s.player,s.npc.id,'service',text);}
+ }
+ if(!actions.ended(src,token,reason))return;
+ if(s.ws?.readyState===WebSocket.OPEN)s.ws.send(JSON.stringify({type:'conversation.item.create',item:{type:'message',role:'system',content:[{type:'input_text',text}]}}));
+});
+onNet('fivemai:observation',(npcId,o)=>{
+ const src=Number(global.source),s=active.get(src);
+ if(!s||s.npc.id!==npcId||!o||!nearby(src,s.npc,35))return;
+ s.observation={aimed:o.aimed===true,armed:o.armed===true,hit:o.hit===true,at:Date.now()};
+});
 function finishJob(token,result){
   const pending=pendingJobs.get(token);if(!pending)return;
   pendingJobs.delete(token);clearTimeout(pending.timer);
@@ -99,14 +146,29 @@ function nearby(src,npc,limit=config.interactionDistance+1) {
 function boundProfile(netId){
   const entity=networkPed(netId),binding=bindings.get(netId);
   if(!entity||!binding||binding.entity!==entity||Entity(entity).state.fivemai_profile_id!==binding.id)return null;
-  const profile=profiles.get(binding.id);return profile?{...profile,netId}:null;
+  const profile=profiles.get(binding.id)||config.npcs.find(n=>n.id===binding.id);return profile?{...profile,netId}:null;
 }
 on('entityRemoved',entity=>{for(const [netId,binding]of bindings)if(binding.entity===entity)bindings.delete(netId);});
 function lookup(id){
-  const fixed=config.npcs.find(n=>n.id===id);if(fixed)return fixed;
+  const fixed=config.npcs.find(n=>n.id===id);if(fixed){const demo=demoPeds.get(id);return {...enrichFixed(fixed,config),...(demo&&DoesEntityExist(demo.entity)?{netId:demo.netId}:{})};}
   for(const netId of bindings.keys()){const npc=boundProfile(netId);if(npc?.id===id)return npc;}
   return null;
 }
+function spawnDemos(){
+ if(!config.demoNetwork||typeof CreatePed!=='function')return;
+ for(const npc of config.npcs){
+  const old=demoPeds.get(npc.id);if(old&&DoesEntityExist(old.entity))continue;
+  const c=npc.coords,entity=CreatePed(4,modelHash(npc.model),c.x,c.y,c.z,c.heading,true,true);
+  if(!entity)continue;
+  if(typeof SetEntityOrphanMode==='function')SetEntityOrphanMode(entity,2);
+  const netId=NetworkGetNetworkIdFromEntity(entity);if(!netId){if(typeof DeleteEntity==='function')DeleteEntity(entity);continue;}
+  demoPeds.set(npc.id,{entity,netId});bindings.set(netId,{id:npc.id,entity});Entity(entity).state.set('fivemai_profile_id',npc.id,true);
+ }
+}
+onNet('fivemai:demoRequest',()=>{
+ spawnDemos();emitNet('fivemai:demos',Number(global.source),Object.fromEntries([...demoPeds].map(([id,ped])=>[id,ped.netId])));
+});
+spawnDemos();
 onNet('fivemai:resolve',target=>{
   const src=Number(global.source),requestId=target?.requestId;
   const reply=result=>emitNet('fivemai:resolved',src,{requestId,...result});
@@ -115,7 +177,7 @@ onNet('fivemai:resolve',target=>{
   let stage='validation de la cible';
   try{
     let npc;
-    if(target && typeof target.id==='string')npc=config.npcs.find(n=>n.id===target.id);
+    if(target && typeof target.id==='string')npc=lookup(target.id);
     else if(config.ambientNPCs && target){
       if(!Number.isInteger(target.netId)||target.netId<=0)throw new Error('Identifiant réseau PNJ invalide');
       // A client-side net ID can exist before OneSync exposes the ped on the server.
@@ -129,12 +191,13 @@ onNet('fivemai:resolve',target=>{
       if(!npc){
         stage='création du profil';const model=GetEntityModel(entity);
         const job=config.jobs?.find(j=>j.models?.some(name=>modelHash(name)===(model>>>0)));
-        const profile=profiles.create(model,job?.id);
+        const profile=profiles.create(model,job?.id,target.sex);
         stage='association du profil au PNJ';
         bindings.set(target.netId,{id:profile.id,entity});Entity(entity).state.set('fivemai_profile_id',profile.id,true);
         npc={...profile,netId:target.netId};
       }
     }
+    if(npc?.netId&&profiles.get(npc.id)&&profiles.ensureAppearance)npc={...profiles.ensureAppearance(npc.id,target.sex),netId:npc.netId};
     stage='validation de proximité';
     if(!npc||!nearby(src,npc))throw new Error('PNJ inaccessible');
     reply({ok:true,profile:{...npc,coords:position(npc)}});
@@ -150,7 +213,7 @@ exports('BindNPCProfile',(netId,profileId)=>{
   for(const [other,binding]of bindings)if(other!==netId&&binding.id===profileId)bindings.delete(other);
   bindings.set(netId,{id:profileId,entity});Entity(entity).state.set('fivemai_profile_id',profileId,true);return true;
 });
-exports('GetNPCProfile',profileId=>{const npc=profiles.get(profileId)||config.npcs.find(n=>n.id===profileId);return npc?JSON.parse(JSON.stringify(npc)):null;});
+exports('GetNPCProfile',profileId=>{const npc=profiles.get(profileId)||lookup(profileId);return npc?JSON.parse(JSON.stringify(npc)):null;});
 exports('AssignNPCJob',(profileId,jobId)=>{
   const job=config.jobs?.find(j=>j.id===jobId)||jobs.jobs.get(jobId);
   if(!job||npcLocks.has(profileId)||!profiles.get(profileId))return false;
@@ -159,17 +222,18 @@ exports('AssignNPCJob',(profileId,jobId)=>{
 async function stop(src) {
   const s=active.get(src); if (!s) return;
   for(const [token,pending]of pendingJobs)if(pending.ctx.src===src)finishJob(token,{ok:false,error:'Conversation terminée'});
-  mechanic.forget(s);active.delete(src); if(npcLocks.get(s.npc.id)===src)npcLocks.delete(s.npc.id);clearTimeout(s.timer); s.ws?.close();
+  actions.stop(s);mechanic.forget(s);active.delete(src); if(npcLocks.get(s.npc.id)===src)npcLocks.delete(s.npc.id);clearTimeout(s.timer); s.ws?.close();
   emitNet('fivemai:closed',src);
   if (s.callId) {
     try { await fetch(`https://api.openai.com/v1/realtime/calls/${s.callId}/hangup`,{method:'POST',headers:{Authorization:`Bearer ${key()}`},signal:AbortSignal.timeout(10000)}); }
     catch { console.warn('[fivemai] Impossible de confirmer la fermeture OpenAI.'); }
   }
 }
-function sessionInstructions(s){return sessionConfig(config,s.npc,[...memory.get('world',s.npc.id).slice(-10),...memory.get(s.player,s.npc.id).slice(-20)],jobs.tools(s.npc.jobId),s.behavior,s.behaviorCause).instructions;}
+function sessionInstructions(s){return `Action réelle en cours: ${s.actionState||'aucune'}. Destinations chauffeur autorisées: ${JSON.stringify(config.destinations||{})}. `+sessionConfig(config,s.npc,[...memory.get('world',s.npc.id).slice(-10),...memory.get(s.player,s.npc.id).slice(-20)],sessionTools(s.npc),s.behavior,s.behaviorCause).instructions;}
 function maybeEmotionalReply(src,s){
- if(active.get(src)!==s||!s.emotionReplyPending||s.awaitingBehaviorUpdate||s.responseActive||s.playerSpeaking||s.toolTurn?.pending||s.toolTurn?.outputs||s.ws?.readyState!==WebSocket.OPEN)return;
- s.emotionReplyPending=false;s.responseActive=true;s.ws.send(JSON.stringify({type:'response.create'}));
+ if(active.get(src)!==s||(!s.emotionReplyPending&&!s.pendingReaction)||s.voiceReady===false||s.awaitingBehaviorUpdate||s.responseActive||s.outputPlaying||s.playerSpeaking||s.toolTurn?.pending||s.toolTurn?.outputs||s.ws?.readyState!==WebSocket.OPEN)return;
+ const reaction=s.pendingReaction;s.pendingReaction=null;s.emotionReplyPending=false;s.responseActive=true;
+ s.ws.send(JSON.stringify(reaction?reactionResponse(sessionInstructions(s),reaction):{type:'response.create'}));
 }
 function pushBehavior(s){
  if(s.ws?.readyState!==WebSocket.OPEN)return;
@@ -178,12 +242,13 @@ function pushBehavior(s){
 }
 onNet('fivemai:speaking',speaking=>{
  const s=active.get(Number(global.source));if(!s)return;
- s.playerSpeaking=speaking===true;if(s.playerSpeaking)s.emotionReplyPending=false;
+ s.playerSpeaking=speaking===true;s.lastActivity=Date.now();if(s.playerSpeaking)s.automatic=false;if(s.playerSpeaking){s.emotionReplyPending=false;s.pendingReaction=null;}
 });
 onNet('fivemai:behavior',(npcId,state,speaking,cause='none')=>{
  const src=Number(global.source),s=active.get(src);
  if(!s||s.npc.id!==npcId||!validBehavior(state)||!validBehaviorCause(cause)||!nearby(src,s.npc,50)||(s.behavior===state&&(s.behaviorCause||'none')===cause))return;
  s.behavior=state;s.behaviorCause=cause;s.playerSpeaking=speaking===true;
+ if(s.playerSpeaking)s.pendingReaction=null;
  if(state!=='calm')for(const [token,pending]of pendingJobs)if(pending.ctx.src===src)finishJob(token,{ok:false,error:'Le PNJ a peur ou se bat; intervention annulée'});
  if(state==='calm')s.emotionReplyPending=false;
  if(s.ws?.readyState!==WebSocket.OPEN)return;
@@ -194,23 +259,50 @@ onNet('fivemai:behavior',(npcId,state,speaking,cause='none')=>{
   if(s.outputPlaying)s.ws.send(JSON.stringify({type:'output_audio_buffer.clear'}));
  }
 });
-onNet('fivemai:offer',async (npcId,sdp,behavior='calm',speaking=false,cause='none')=>{
+onNet('fivemai:voiceReady',npcId=>{
+ const src=Number(global.source),s=active.get(src);if(!s||s.npc.id!==npcId)return;
+ s.voiceReady=true;maybeEmotionalReply(src,s);
+});
+onNet('fivemai:react',(npcId,kind)=>{
+ const src=Number(global.source),s=active.get(src);
+ if(config.reactions?.enabled===false||!s||s.npc.id!==npcId||!validReaction(kind)||!nearby(src,s.npc,config.voiceMaxDistance||18)||s.playerSpeaking)return;
+ if(Date.now()-(s.lastReactionAt||0)<(config.reactions?.cooldownSeconds||8)*1000)return;
+ const allowed=kind==='aim'?s.observation?.aimed===true&&Date.now()-s.observation.at<2000:kind==='hit'?(s.behaviorCause==='hit'||s.observation?.hit===true&&Date.now()-s.observation.at<2000):kind==='flee'?['afraid','afraid_player'].includes(s.behavior):['angry','combat'].includes(s.behavior);
+ if(!allowed)return;
+ s.lastReactionAt=Date.now();s.lastActivity=Date.now();s.pendingReaction=kind;
+ maybeEmotionalReply(src,s);
+});
+onNet('fivemai:offer',async (npcId,sdp,behavior='calm',speaking=false,cause='none',observation={})=>{
   const src=Number(global.source);
-  const npc=lookup(npcId);
+  let npc=lookup(npcId);
+  if(npc?.netId&&observation?.netId&&npc.netId!==observation.netId)return emitNet('fivemai:error',src,'Identité réseau du PNJ incorrecte.');
+  const fixed=config.npcs.find(n=>n.id===npcId);
+  if(npc&&fixed)npc={...enrichFixed(fixed,config,observation?.sex),...(npc.netId?{netId:npc.netId}:{})};
+  if(npc&&!npc.netId&&observation?.netId){
+   const entity=networkPed(observation.netId);
+   if(!entity||GetEntityModel(entity)>>>0!==modelHash(npc.model)||GetEntityRoutingBucket(entity)!==GetPlayerRoutingBucket(String(src)))return emitNet('fivemai:error',src,'PNJ de démonstration pas encore synchronisé. Réessayez.');
+   const [x,y,z]=GetEntityCoords(entity);
+   if(bindings.get(observation.netId)?.id!==npc.id&&distance({x,y,z},npc.coords)>config.interactionDistance+1)return emitNet('fivemai:error',src,'PNJ de démonstration invalide.');
+   bindings.set(observation.netId,{id:npc.id,entity});Entity(entity).state.set('fivemai_profile_id',npc.id,true);npc={...npc,netId:observation.netId};
+  }
+  const automatic=observation?.automatic===true;
+  if(automatic&&(config.reactions?.enabled===false||!validReaction(observation.reaction)))return emitNet('fivemai:error',src,'Réaction automatique invalide.');
   if (!npc || typeof sdp!=='string' || sdp.length>40000 || !sdp.startsWith('v=0') || !nearby(src,npc)) return emitNet('fivemai:error',src,'PNJ inaccessible ou requête invalide.');
   if(npcLocks.has(npc.id))return emitNet('fivemai:error',src,'Ce PNJ est déjà en conversation.');
-  if (active.size>=8 || active.has(src) || Date.now()-(cooldown.get(src)||0)<10000) return emitNet('fivemai:error',src,'Attendez avant de relancer une conversation.');
+  if (active.size>=8 || active.has(src) || (automatic?Date.now()-(autoCooldown.get(src)||0)<(config.reactions?.autoCooldownSeconds||15)*1000:Date.now()-(cooldown.get(src)||0)<10000)) return emitNet('fivemai:error',src,'Attendez avant de relancer une conversation.');
   const player=identity(src);
   if (!player || !key()) return emitNet('fivemai:error',src,'Identifiant joueur ou clé OpenAI serveur manquante.');
-  cooldown.set(src,Date.now());
+  (automatic?autoCooldown:cooldown).set(src,Date.now());
   const initialBehavior=validBehavior(behavior)?behavior:'calm';
-  const s={npc,player,behavior:initialBehavior,behaviorCause:validBehaviorCause(cause)?cause:'none',playerSpeaking:speaking===true,responseActive:false,outputPlaying:false,emotionReplyPending:false,awaitingBehaviorUpdate:false,callId:null,ws:null,timer:null,remembered:new Set()}; active.set(src,s);npcLocks.set(npc.id,src);
+  const s={npc,player,behavior:initialBehavior,behaviorCause:validBehaviorCause(cause)?cause:'none',playerSpeaking:speaking===true,responseActive:false,outputPlaying:false,emotionReplyPending:false,awaitingBehaviorUpdate:false,callId:null,ws:null,timer:null,remembered:new Set(),automatic,voiceReady:false,lastActivity:Date.now(),pendingReaction:automatic?observation.reaction:null,lastReactionAt:automatic?Date.now():0,observation:{aimed:observation?.aimed===true,armed:observation?.armed===true,hit:observation?.hit===true,at:Date.now()}}; active.set(src,s);npcLocks.set(npc.id,src);
   s.timer=setTimeout(()=>void stop(src),config.maxSessionSeconds*1000);
   try {
     const body=new FormData();
     // The API expects form fields, not uploaded files with filenames.
     body.set('sdp',sdp);
-    body.set('session',JSON.stringify(sessionConfig(config,npc,[...memory.get('world',npc.id).slice(-10),...memory.get(player,npc.id).slice(-20)],jobs.tools(npc.jobId),s.behavior,s.behaviorCause)));
+    const realtimeConfig=sessionConfig(config,npc,[...memory.get('world',npc.id).slice(-10),...memory.get(player,npc.id).slice(-20)],sessionTools(npc),s.behavior,s.behaviorCause);
+    realtimeConfig.instructions=sessionInstructions(s);
+    body.set('session',JSON.stringify(realtimeConfig));
     const result=await fetch('https://api.openai.com/v1/realtime/calls',{method:'POST',headers:{Authorization:`Bearer ${key()}`},body,signal:AbortSignal.timeout(20000)});
     if (!result.ok) throw await openAIError(result,key());
     const answer=await result.text();
@@ -236,7 +328,7 @@ onNet('fivemai:offer',async (npcId,sdp,behavior='calm',speaking=false,cause='non
         if(event.type==='response.created'){s.responseActive=true;toolTurn.created();return;}
         if(event.type==='session.updated'){s.awaitingBehaviorUpdate=false;maybeEmotionalReply(src,s);return;}
         if(event.type==='output_audio_buffer.started'){s.outputPlaying=true;return;}
-        if(event.type==='output_audio_buffer.stopped'||event.type==='output_audio_buffer.cleared'){s.outputPlaying=false;return;}
+        if(event.type==='output_audio_buffer.stopped'||event.type==='output_audio_buffer.cleared'){s.outputPlaying=false;maybeEmotionalReply(src,s);return;}
         if(event.type==='response.done'){s.responseActive=false;toolTurn.done();maybeEmotionalReply(src,s);return;}
         if(event.type!=='response.function_call_arguments.done'||s.remembered.has(event.call_id))return;
         s.remembered.add(event.call_id);toolTurn.begin();
@@ -246,6 +338,8 @@ onNet('fivemai:offer',async (npcId,sdp,behavior='calm',speaking=false,cause='non
           const args=JSON.parse(event.arguments);
           if(event.name==='remember_memory'){
             memory.add(player,npc.id,'conversation',args.memory);output={saved:true};
+          }else if(['npc_action','driver_trip'].includes(event.name)){
+            output=await actions.execute(event.name,{src,session:s},args);
           }else{
             output=await jobs.execute(npc.jobId,event.name,{src,session:s},args);
           }
@@ -264,10 +358,11 @@ onNet('fivemai:offer',async (npcId,sdp,behavior='calm',speaking=false,cause='non
   }
 });
 onNet('fivemai:stop',()=>void stop(Number(global.source)));
-on('playerDropped',()=>{const src=Number(global.source);void stop(src);cooldown.delete(src);resolveCooldown.delete(src);});
+on('playerDropped',()=>{const src=Number(global.source);void stop(src);cooldown.delete(src);autoCooldown.delete(src);resolveCooldown.delete(src);});
 // Hearing range controls client volume, not the lifetime of the current reply.
 setInterval(()=>{for(const [src,s] of active){
   const coords=position(s.npc);
+  if(s.automatic&&!s.playerSpeaking&&!s.responseActive&&!s.outputPlaying&&!s.actionState&&Date.now()-s.lastActivity>(config.reactions?.idleSeconds||30)*1000){void stop(src);continue;}
   if(!GetPlayerPed(String(src)) || !coords || GetPlayerRoutingBucket(String(src))!==npcBucket(s.npc))void stop(src);
   else if(s.npc.netId)emitNet('fivemai:position',src,coords);
 }},1000);
@@ -283,7 +378,7 @@ exports('RecordEvent',(playerSource,event)=>{
   }
   return true;
 });
-on('onResourceStop',name=>{if(name===GetCurrentResourceName()) for(const src of active.keys()) void stop(src);});
+on('onResourceStop',name=>{if(name!==GetCurrentResourceName())return;for(const src of active.keys())void stop(src);for(const {entity}of demoPeds.values())if(DoesEntityExist(entity)&&typeof DeleteEntity==='function')DeleteEntity(entity);});
 
 exports('RecordNPCEvent',(npcId,description)=>{
  if(!lookup(npcId)&&!profiles.get(npcId))return false;
@@ -293,4 +388,4 @@ exports('RecordNPCEvent',(npcId,description)=>{
 });
 
 console.log('[fivemai] Serveur prêt — résolution des profils v2.');
-console.log(`[fivemai] Version npc-capture-2 chargée depuis ${root}`);
+console.log(`[fivemai] Version npc-actions-1 chargée depuis ${root}`);

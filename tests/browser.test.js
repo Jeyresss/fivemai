@@ -63,3 +63,7 @@ test('empty microphone exception produces a meaningful error instead of a blank 
  assert.ok(s.requests.some(r=>r[0].endsWith('/diagnostic')&&r[1].message.includes('NotReadableError')));
  assert.equal(s.requests.some(r=>r[0].endsWith('/offer')),false);
 });
+
+test('unsolicited NPC audio connects with the microphone muted and reports voice readiness',async()=>{
+ const s=browser();await s.event({type:'open',sessionId:18,npc:{id:'npc-a',name:'Alice'}});await tick();s.peer.channel.readyState='open';s.peer.channel.onopen();await tick();assert.equal(s.track.enabled,false);assert.ok(s.requests.some(r=>r[0]==='https://fivemai/voiceReady'&&r[1].npcId==='npc-a'));assert.deepEqual(s.messages,[]);
+});

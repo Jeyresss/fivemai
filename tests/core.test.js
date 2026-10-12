@@ -40,3 +40,8 @@ test('player-caused fear addresses the aggressor and keeps the observed cause pr
  const aim=sessionConfig(config,config.npcs[0],[],[],'afraid_player','aim');assert.match(aim.instructions,/a visé ou braqué/);assert.match(aim.instructions,/Ne prétends pas qu’un tir a touché/);
  const preparation=sessionConfig(config,config.npcs[0],[],[],'angry','melee');assert.match(preparation.instructions,/se prépare à une bagarre/);assert.match(preparation.instructions,/ne prétends pas que des coups/);
 });
+
+test('first upgrade snapshots existing data before migration and never overwrites that snapshot',()=>{
+ const {backupData}=require('../server/core'),dir=fs.mkdtempSync(path.join(os.tmpdir(),'fivemai-upgrade-'));
+ try{const file=path.join(dir,'profiles.json');fs.writeFileSync(file,'{"old":true}');const backup=backupData(file);assert.equal(fs.readFileSync(backup,'utf8'),'{"old":true}');fs.writeFileSync(file,'{"new":true}');backupData(file);assert.equal(fs.readFileSync(backup,'utf8'),'{"old":true}');assert.equal(fs.existsSync(backupData(path.join(dir,'missing.json'))),false);}finally{fs.rmSync(dir,{recursive:true});}
+});

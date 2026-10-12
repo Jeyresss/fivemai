@@ -141,7 +141,7 @@ async function connect(npc,microphone){
     peer.addTrack(track,stream);channel=peer.createDataChannel('oai-events');
     ptt=new PushToTalk({send:e=>{if(channel?.readyState==='open')channel.send(JSON.stringify(e));},track,status});
     ptt.setHeld(held);
-    channel.onopen=()=>{if(run!==generation)return;clearTimeout(timer);ptt.connected();if(ptt.recording)turnHealth={samples:0,measured:false,peak:0,firstBytes:null,lastBytes:null};meterTimer=setInterval(()=>void inspectAudio(peer,run),200);};
+    channel.onopen=()=>{if(run!==generation)return;clearTimeout(timer);ptt.connected();void post('voiceReady',{npcId:npc.id}).catch(()=>{});if(ptt.recording)turnHealth={samples:0,measured:false,peak:0,firstBytes:null,lastBytes:null};meterTimer=setInterval(()=>void inspectAudio(peer,run),200);};
     channel.onclose=()=>{if(run===generation)fail('Canal vocal fermé. Relâchez puis réessayez.');};
     channel.onmessage=({data})=>{
       if(run!==generation)return;
