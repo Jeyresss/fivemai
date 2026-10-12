@@ -158,3 +158,54 @@ commands['+fivemai_talk']()
 assert(sent[1].type=='notice')
 assert(string.find(logs[#logs-1],'joueur=true'))
 `));
+
+const movementFixture=`
+local positions={[10]=vector3(2,0,0),[300]=vector3(0,0,0)}
+local savedCoords=GetEntityCoords
+GetEntityCoords=function(ped)return positions[ped] or savedCoords(ped)end
+local steps, frozen, repairs = {}, true, 0
+NetworkDoesEntityExistWithNetworkId=function(id)return id==44 end
+NetToVeh=function()return 300 end
+NetworkHasControlOfEntity=function()return true end
+GetEntityHeading=function()return 0 end
+GetModelDimensions=function()return vector3(-1,-2,-0.5),vector3(1,2,0.5)end
+GetOffsetFromEntityInWorldCoords=function(_,x,y,z)return vector3(x,y,z)end
+GetGroundZFor_3dCoord=function()return true,0 end
+GetHeadingFromVector_2d=function()return 180 end
+GetEntitySpeed=function()return 0 end
+FreezeEntityPosition=function(_,state)frozen=state end
+ClearPedTasks=function()table.insert(steps,'clear')end
+TaskFollowNavMeshToCoord=function(ped,x,y,z)
+ assert(not frozen,'Mechanic must be unfrozen before walking')
+ table.insert(steps,'walk');positions[ped]=vector3(x,y,z)
+end
+TaskAchieveHeading=function()table.insert(steps,'face')end
+RequestAnimDict=function()end
+HasAnimDictLoaded=function()return true end
+TaskPlayAnim=function()table.insert(steps,'animate')end
+GetPedInVehicleSeat=function()return 99 end
+SetVehicleFixed=function()repairs=repairs+1 end
+TriggerServerEvent=function(name,data,... )table.insert(network,{name=name,data=data,args={...}})end
+commands['+fivemai_talk']()
+events['fivemai:jobStart']({token='job-a',netId=44,npcId='marcel_dubois'})
+`;
+test('mechanic walks beyond the vehicle front, faces the hood and animates before acknowledging arrival',()=>run(movementFixture+`
+threads[3]()
+assert(steps[2]=='walk' and steps[3]=='face' and steps[4]=='animate')
+assert(math.abs(positions[10].y-2.7)<0.001,'Stand outside the front bounding box')
+assert(network[#network].name=='fivemai:jobArrived' and network[#network].args[1]==true)
+assert(repairs==0,'Arrival must not itself repair the vehicle')
+`));
+test('mechanic refuses arrival if the car is moving and does not start work',()=>run(movementFixture+`
+GetEntitySpeed=function()return 1 end
+threads[3]()
+assert(network[#network].name=='fivemai:jobArrived' and network[#network].args[1]==false)
+for _,step in ipairs(steps)do assert(step~='animate')end
+assert(repairs==0)
+`));
+test('repair cannot apply before the mechanic reaches the hood',()=>run(movementFixture+`
+events['fivemai:jobApply']({token='job-a',netId=44,npcId='marcel_dubois',service='repair'})
+threads[4]()
+assert(repairs==0)
+assert(network[#network].name=='fivemai:jobResult' and network[#network].args[1]~=true)
+`));

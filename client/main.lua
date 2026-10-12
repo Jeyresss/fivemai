@@ -251,33 +251,98 @@ RegisterNUICallback('microphone', function(data, cb)
     cb({ok=true})
 end)
 
-local workingPed = nil
+local workingJob = nil
+local movementSerial = 0
+local function takeControl(entity, deadline)
+    if not NetworkGetEntityIsNetworked(entity) then return true end
+    while DoesEntityExist(entity) and not NetworkHasControlOfEntity(entity) and GetGameTimer() < deadline do
+        NetworkRequestControlOfEntity(entity)
+        Wait(50)
+    end
+    return DoesEntityExist(entity) and NetworkHasControlOfEntity(entity)
+end
 RegisterNetEvent('fivemai:jobStart', function(data)
-    local ped = data.npcNetId and NetToPed(data.npcNetId) or peds[data.npcId]
-    if not ped or not DoesEntityExist(ped) then return end
-    workingPed = ped
+    local ped = currentNpc and currentNpc.id == data.npcId and currentPed or (data.npcNetId and NetToPed(data.npcNetId) or peds[data.npcId])
+    local vehicle = NetworkDoesEntityExistWithNetworkId(data.netId) and NetToVeh(data.netId) or 0
+    if not ped or not DoesEntityExist(ped) or not DoesEntityExist(vehicle) then
+        TriggerServerEvent('fivemai:jobArrived', data.token, false)
+        return
+    end
+    movementSerial = movementSerial + 1
+    local job = {token=data.token, ped=ped, vehicle=vehicle, origin=GetEntityCoords(ped), heading=GetEntityHeading(ped), fixed=peds[data.npcId]==ped, serial=movementSerial}
+    workingJob = job
     CreateThread(function()
-        RequestAnimDict('mini@repair')
-        local deadline = GetGameTimer() + 1500
-        while not HasAnimDictLoaded('mini@repair') and GetGameTimer() < deadline do Wait(50) end
-        if workingPed == ped and HasAnimDictLoaded('mini@repair') and (not NetworkGetEntityIsNetworked(ped) or NetworkHasControlOfEntity(ped)) then
-            TaskPlayAnim(ped, 'mini@repair', 'fixing_a_ped', 3.0, -3.0, -1, 1, 0, false, false, false)
+        local deadline = GetGameTimer() + 15000
+        if not takeControl(ped, GetGameTimer() + 2000) then
+            TriggerServerEvent('fivemai:jobArrived', job.token, false)
+            return
         end
+        local startVehicle = GetEntityCoords(vehicle)
+        local _, max = GetModelDimensions(GetEntityModel(vehicle))
+        local target = GetOffsetFromEntityInWorldCoords(vehicle, 0.0, max.y + 0.7, 0.0)
+        local ground, z = GetGroundZFor_3dCoord(target.x, target.y, target.z + 2.0, false)
+        if ground then target = vector3(target.x, target.y, z) end
+        FreezeEntityPosition(ped, false)
+        ClearPedTasks(ped)
+        local center = GetEntityCoords(vehicle)
+        local heading = GetHeadingFromVector_2d(center.x - target.x, center.y - target.y)
+        TaskFollowNavMeshToCoord(ped, target.x, target.y, target.z, 1.0, 15000, 0.65, 0, heading)
+        while workingJob == job and DoesEntityExist(ped) and DoesEntityExist(vehicle) and GetGameTimer() < deadline do
+            if entityDistance(GetEntityCoords(vehicle), startVehicle) > 0.5 or GetEntitySpeed(vehicle) > 0.3 then break end
+            if entityDistance(GetEntityCoords(ped), target) <= 0.9 then
+                TaskAchieveHeading(ped, heading, 700)
+                Wait(700)
+                if workingJob ~= job or not DoesEntityExist(vehicle) or entityDistance(GetEntityCoords(vehicle), startVehicle) > 0.5 then break end
+                RequestAnimDict('mini@repair')
+                local animationDeadline = GetGameTimer() + 1500
+                while not HasAnimDictLoaded('mini@repair') and GetGameTimer() < animationDeadline do Wait(50) end
+                if workingJob == job and HasAnimDictLoaded('mini@repair') then
+                    job.target, job.vehicleOrigin = target, startVehicle
+                    TaskPlayAnim(ped, 'mini@repair', 'fixing_a_ped', 3.0, -3.0, -1, 1, 0, false, false, false)
+                    TriggerServerEvent('fivemai:jobArrived', job.token, true)
+                    return
+                end
+                break
+            end
+            Wait(100)
+        end
+        if workingJob == job then TriggerServerEvent('fivemai:jobArrived', job.token, false) end
     end)
 end)
-RegisterNetEvent('fivemai:jobEnd', function()
-    if workingPed and DoesEntityExist(workingPed) then StopAnimTask(workingPed, 'mini@repair', 'fixing_a_ped', 1.0) end
-    workingPed = nil
+RegisterNetEvent('fivemai:jobEnd', function(data)
+    local job = workingJob
+    if not job or data.token ~= job.token then return end
+    workingJob = nil
+    if not DoesEntityExist(job.ped) then return end
+    ClearPedTasks(job.ped)
+    -- Demo peds return to their anchor so their configured server position remains valid.
+    if job.fixed then
+        CreateThread(function()
+            TaskFollowNavMeshToCoord(job.ped, job.origin.x, job.origin.y, job.origin.z, 1.0, 15000, 0.65, 0, job.heading)
+            local deadline = GetGameTimer() + 15000
+            while movementSerial == job.serial and DoesEntityExist(job.ped) and GetGameTimer() < deadline do
+                if entityDistance(GetEntityCoords(job.ped), job.origin) <= 0.9 then
+                    FreezeEntityPosition(job.ped, true)
+                    return
+                end
+                Wait(100)
+            end
+        end)
+    end
 end)
 RegisterNetEvent('fivemai:jobApply', function(data)
     CreateThread(function()
         local vehicle = NetworkDoesEntityExistWithNetworkId(data.netId) and NetToVeh(data.netId) or 0
         local player = PlayerPedId()
-        local ok = currentNpc and currentNpc.id == data.npcId and DoesEntityExist(vehicle) and GetPedInVehicleSeat(vehicle, -1) == player
+        local job = workingJob
+        local ok = job and job.token == data.token and job.target and currentNpc and currentNpc.id == data.npcId and DoesEntityExist(vehicle) and GetPedInVehicleSeat(vehicle, -1) == player
         if ok then
             local deadline = GetGameTimer() + 1500
             while not NetworkHasControlOfEntity(vehicle) and GetGameTimer() < deadline do NetworkRequestControlOfEntity(vehicle) Wait(50) end
-            ok = currentNpc and currentNpc.id == data.npcId and NetworkHasControlOfEntity(vehicle) and GetPedInVehicleSeat(vehicle, -1) == player
+            ok = workingJob == job and currentNpc and currentNpc.id == data.npcId and NetworkHasControlOfEntity(vehicle) and GetPedInVehicleSeat(vehicle, -1) == player
+        end
+        if ok then
+            ok = DoesEntityExist(job.ped) and entityDistance(GetEntityCoords(job.ped), job.target) <= 1.2 and entityDistance(GetEntityCoords(vehicle), job.vehicleOrigin) <= 0.5 and GetEntitySpeed(vehicle) <= 0.3
         end
         if ok and data.service == 'repair' then
             SetVehicleFixed(vehicle)

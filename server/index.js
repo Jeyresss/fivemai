@@ -15,7 +15,7 @@ const key=()=>GetConvar('fivemai_openai_key','');
 function identity(src) { return getPlayerIdentifiers(String(src)).find(x=>x.startsWith('license:')); }
 const jobs=new JobRegistry(),pendingJobs=new Map();
 function inspectVehicle(ctx){
-  if(active.get(ctx.src)!==ctx.session||!nearby(ctx.src,ctx.session.npc))throw new Error('Restez près du mécanicien');
+  if(active.get(ctx.src)!==ctx.session||!nearby(ctx.src,ctx.session.npc,8))throw new Error('Restez près du mécanicien');
   const ped=GetPlayerPed(String(ctx.src)),vehicle=GetVehiclePedIsIn(ped,false);
   if(!vehicle||!DoesEntityExist(vehicle)||GetPedInVehicleSeat(vehicle,-1)!==ped)throw new Error('Installez-vous au volant du véhicule à modifier');
   const [x,y,z]=GetEntityCoords(vehicle),npcPos=position(ctx.session.npc);
@@ -25,24 +25,35 @@ function inspectVehicle(ctx){
 function finishJob(token,result){
   const pending=pendingJobs.get(token);if(!pending)return;
   pendingJobs.delete(token);clearTimeout(pending.timer);
-  emitNet('fivemai:jobEnd',pending.ctx.src);pending.resolve(result);
+  emitNet('fivemai:jobEnd',pending.ctx.src,{token});pending.resolve(result);
 }
 const mechanic=new MechanicJob({inspect:inspectVehicle,
  apply:(ctx,quote)=>new Promise(resolve=>{
   const token=require('node:crypto').randomUUID();
-  const pending={ctx,quote,resolve,timer:null,stage:'working'};pendingJobs.set(token,pending);
-  emitNet('fivemai:jobStart',ctx.src,{npcId:ctx.session.npc.id,npcNetId:ctx.session.npc.netId});
-  pending.timer=setTimeout(()=>{
-   try{
-    if(inspectVehicle(ctx).netId!==quote.vehicle.netId)throw new Error('Véhicule changé pendant l’intervention');
-    pending.stage='applying';
-    pending.timer=setTimeout(()=>finishJob(token,{ok:false,error:'Application du service non confirmée'}),8000);
-    emitNet('fivemai:jobApply',ctx.src,{token,npcId:ctx.session.npc.id,netId:quote.vehicle.netId,service:quote.service,colour:quote.colour});
-   }catch(e){finishJob(token,{ok:false,error:e.message});}
-  },4000);
+  const pending={ctx,quote,resolve,timer:null,stage:'walking'};pendingJobs.set(token,pending);
+  pending.timer=setTimeout(()=>finishJob(token,{ok:false,error:'Le mécanicien n’a pas atteint le capot'}),20000);
+  emitNet('fivemai:jobStart',ctx.src,{token,netId:quote.vehicle.netId,npcId:ctx.session.npc.id,npcNetId:ctx.session.npc.netId});
  }),remember:(ctx,text)=>memory.add(ctx.session.player,ctx.session.npc.id,'service',text)});
 jobs.register(mechanic);
 exports('RegisterJob',job=>{jobs.register(job);return true;});
+onNet('fivemai:jobArrived',(token,success)=>{
+ const src=Number(global.source),pending=pendingJobs.get(token);
+ if(!pending||pending.ctx.src!==src||pending.stage!=='walking')return;
+ if(success!==true)return finishJob(token,{ok:false,error:'Le mécanicien ne peut pas rejoindre le capot ou le véhicule a bougé'});
+ try{
+  if(inspectVehicle(pending.ctx).netId!==pending.quote.vehicle.netId)throw new Error('Véhicule changé');
+  clearTimeout(pending.timer);pending.stage='working';
+  pending.timer=setTimeout(()=>{
+   try{
+    if(inspectVehicle(pending.ctx).netId!==pending.quote.vehicle.netId)throw new Error('Véhicule changé pendant l’intervention');
+    pending.stage='applying';
+    pending.timer=setTimeout(()=>finishJob(token,{ok:false,error:'Application du service non confirmée'}),8000);
+    const {ctx,quote}=pending;
+    emitNet('fivemai:jobApply',src,{token,npcId:ctx.session.npc.id,netId:quote.vehicle.netId,service:quote.service,colour:quote.colour});
+   }catch(e){finishJob(token,{ok:false,error:errorMessage(e)});}
+  },4000);
+ }catch(e){finishJob(token,{ok:false,error:errorMessage(e)});}
+});
 onNet('fivemai:jobResult',(token,success)=>{
  const src=Number(global.source),pending=pendingJobs.get(token);
  if(!pending||pending.ctx.src!==src||pending.stage!=='applying')return;
