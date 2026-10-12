@@ -163,7 +163,7 @@ const movementFixture=`
 local positions={[10]=vector3(2,0,0),[300]=vector3(0,0,0)}
 local savedCoords=GetEntityCoords
 GetEntityCoords=function(ped)return positions[ped] or savedCoords(ped)end
-local steps, frozen, repairs = {}, true, 0
+local steps, frozen, repairs, hood, engine = {}, true, 0, 0, 500
 NetworkDoesEntityExistWithNetworkId=function(id)return id==44 end
 NetToVeh=function()return 300 end
 NetworkHasControlOfEntity=function()return true end
@@ -183,15 +183,23 @@ TaskAchieveHeading=function()table.insert(steps,'face')end
 RequestAnimDict=function()end
 HasAnimDictLoaded=function()return true end
 TaskPlayAnim=function()table.insert(steps,'animate')end
-GetPedInVehicleSeat=function()return 99 end
+GetPedInVehicleSeat=function()return 0 end
+GetIsDoorValid=function()return true end
+GetVehicleDoorAngleRatio=function()return hood end
+SetVehicleDoorOpen=function(_,door)assert(door==4)hood=1 table.insert(steps,'hood')end
+SetVehicleDoorShut=function(_,door)assert(door==4)hood=0 table.insert(steps,'shut')end
+SetVehicleDeformationFixed=function()end
+SetVehicleEngineHealth=function(_,value)engine=value end
+SetVehicleBodyHealth=function()end
+GetVehicleEngineHealth=function()return engine end
 SetVehicleFixed=function()repairs=repairs+1 end
 TriggerServerEvent=function(name,data,... )table.insert(network,{name=name,data=data,args={...}})end
 commands['+fivemai_talk']()
-events['fivemai:jobStart']({token='job-a',netId=44,npcId='marcel_dubois'})
+events['fivemai:jobStart']({token='job-a',netId=44,npcId='marcel_dubois',service='repair'})
 `;
 test('mechanic walks beyond the vehicle front, faces the hood and animates before acknowledging arrival',()=>run(movementFixture+`
 threads[3]()
-assert(steps[2]=='walk' and steps[3]=='face' and steps[4]=='animate')
+assert(steps[2]=='walk' and steps[3]=='face' and steps[4]=='hood' and steps[5]=='animate')
 assert(math.abs(positions[10].y-2.7)<0.001,'Stand outside the front bounding box')
 assert(network[#network].name=='fivemai:jobArrived' and network[#network].args[1]==true)
 assert(repairs==0,'Arrival must not itself repair the vehicle')
@@ -208,4 +216,15 @@ events['fivemai:jobApply']({token='job-a',netId=44,npcId='marcel_dubois',service
 threads[4]()
 assert(repairs==0)
 assert(network[#network].name=='fivemai:jobResult' and network[#network].args[1]~=true)
+`));
+
+test('parked vehicle repairs successfully with the player outside and the hood opened first',()=>run(movementFixture+`
+threads[3]()
+assert(hood==1 and network[#network].args[1]==true)
+events['fivemai:jobApply']({token='job-a',netId=44,npcId='marcel_dubois',service='repair'})
+threads[4]()
+assert(repairs==1 and engine==1000)
+assert(network[#network].name=='fivemai:jobResult' and network[#network].args[1]==true)
+events['fivemai:jobEnd']({token='job-a'})
+assert(hood==0,'Close the hood we opened when service finishes')
 `));

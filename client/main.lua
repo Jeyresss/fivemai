@@ -273,10 +273,11 @@ RegisterNetEvent('fivemai:jobStart', function(data)
     workingJob = job
     CreateThread(function()
         local deadline = GetGameTimer() + 15000
-        if not takeControl(ped, GetGameTimer() + 2000) then
-            TriggerServerEvent('fivemai:jobArrived', job.token, false)
+        if not takeControl(ped, GetGameTimer() + 2000) or not takeControl(vehicle, GetGameTimer() + 2000) then
+            TriggerServerEvent('fivemai:jobArrived', job.token, false, 'control')
             return
         end
+        if workingJob ~= job then return end
         local startVehicle = GetEntityCoords(vehicle)
         local _, max = GetModelDimensions(GetEntityModel(vehicle))
         local target = GetOffsetFromEntityInWorldCoords(vehicle, 0.0, max.y + 0.7, 0.0)
@@ -298,6 +299,16 @@ RegisterNetEvent('fivemai:jobStart', function(data)
                 while not HasAnimDictLoaded('mini@repair') and GetGameTimer() < animationDeadline do Wait(50) end
                 if workingJob == job and HasAnimDictLoaded('mini@repair') then
                     job.target, job.vehicleOrigin = target, startVehicle
+                    if GetIsDoorValid(vehicle, 4) then
+                        job.hoodWasOpen = GetVehicleDoorAngleRatio(vehicle, 4) > 0.05
+                        SetVehicleDoorOpen(vehicle, 4, false, false)
+                        job.openedHood = true
+                        Wait(400)
+                    elseif data.service == 'repair' then
+                        TriggerServerEvent('fivemai:jobArrived', job.token, false, 'hood')
+                        return
+                    end
+                    if workingJob ~= job or not DoesEntityExist(vehicle) or entityDistance(GetEntityCoords(vehicle), startVehicle) > 0.5 then break end
                     TaskPlayAnim(ped, 'mini@repair', 'fixing_a_ped', 3.0, -3.0, -1, 1, 0, false, false, false)
                     TriggerServerEvent('fivemai:jobArrived', job.token, true)
                     return
@@ -313,6 +324,9 @@ RegisterNetEvent('fivemai:jobEnd', function(data)
     local job = workingJob
     if not job or data.token ~= job.token then return end
     workingJob = nil
+    if job.openedHood and DoesEntityExist(job.vehicle) and NetworkHasControlOfEntity(job.vehicle) then
+        if job.hoodWasOpen then SetVehicleDoorOpen(job.vehicle, 4, false, false) else SetVehicleDoorShut(job.vehicle, 4, false) end
+    end
     if not DoesEntityExist(job.ped) then return end
     ClearPedTasks(job.ped)
     -- Demo peds return to their anchor so their configured server position remains valid.
@@ -333,13 +347,12 @@ end)
 RegisterNetEvent('fivemai:jobApply', function(data)
     CreateThread(function()
         local vehicle = NetworkDoesEntityExistWithNetworkId(data.netId) and NetToVeh(data.netId) or 0
-        local player = PlayerPedId()
         local job = workingJob
-        local ok = job and job.token == data.token and job.target and currentNpc and currentNpc.id == data.npcId and DoesEntityExist(vehicle) and GetPedInVehicleSeat(vehicle, -1) == player
+        local ok = job and job.token == data.token and job.target and currentNpc and currentNpc.id == data.npcId and DoesEntityExist(vehicle) and job.vehicle == vehicle and entityDistance(GetEntityCoords(PlayerPedId()), GetEntityCoords(vehicle)) <= 12
         if ok then
             local deadline = GetGameTimer() + 1500
             while not NetworkHasControlOfEntity(vehicle) and GetGameTimer() < deadline do NetworkRequestControlOfEntity(vehicle) Wait(50) end
-            ok = workingJob == job and currentNpc and currentNpc.id == data.npcId and NetworkHasControlOfEntity(vehicle) and GetPedInVehicleSeat(vehicle, -1) == player
+            ok = workingJob == job and currentNpc and currentNpc.id == data.npcId and NetworkHasControlOfEntity(vehicle) and job.vehicle == vehicle and entityDistance(GetEntityCoords(PlayerPedId()), GetEntityCoords(vehicle)) <= 12
         end
         if ok then
             ok = DoesEntityExist(job.ped) and entityDistance(GetEntityCoords(job.ped), job.target) <= 1.2 and entityDistance(GetEntityCoords(vehicle), job.vehicleOrigin) <= 0.5 and GetEntitySpeed(vehicle) <= 0.3

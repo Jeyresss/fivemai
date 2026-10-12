@@ -5,7 +5,7 @@ const root=GetResourcePath(GetCurrentResourceName());
 const resourceRequire=require('node:module').createRequire(path.join(root,'package.json'));
 const WebSocket=resourceRequire('ws');
 const {MemoryStore,sessionConfig,distance,openAIError,modelHash,errorMessage}=resourceRequire('./server/core.js');
-const {JobRegistry,MechanicJob,ToolTurnCoordinator}=resourceRequire('./server/jobs.js');
+const {JobRegistry,MechanicJob,ToolTurnCoordinator,selectVehicle}=resourceRequire('./server/jobs.js');
 const {ProfileStore}=resourceRequire('./server/profiles.js');
 const config=JSON.parse(fs.readFileSync(path.join(root,'config.json'),'utf8'));
 const memory=new MemoryStore(path.join(root,'data','memory.json'));
@@ -14,13 +14,20 @@ const bindings=new Map(), npcLocks=new Map(), active=new Map(), cooldown=new Map
 const key=()=>GetConvar('fivemai_openai_key','');
 function identity(src) { return getPlayerIdentifiers(String(src)).find(x=>x.startsWith('license:')); }
 const jobs=new JobRegistry(),pendingJobs=new Map();
-function inspectVehicle(ctx){
-  if(active.get(ctx.src)!==ctx.session||!nearby(ctx.src,ctx.session.npc,8))throw new Error('Restez près du mécanicien');
-  const ped=GetPlayerPed(String(ctx.src)),vehicle=GetVehiclePedIsIn(ped,false);
-  if(!vehicle||!DoesEntityExist(vehicle)||GetPedInVehicleSeat(vehicle,-1)!==ped)throw new Error('Installez-vous au volant du véhicule à modifier');
-  const [x,y,z]=GetEntityCoords(vehicle),npcPos=position(ctx.session.npc);
-  if(distance({x,y,z},npcPos)>6)throw new Error('Véhicule trop éloigné du mécanicien');
-  return {netId:NetworkGetNetworkIdFromEntity(vehicle),plate:GetVehicleNumberPlateText(vehicle)};
+function inspectVehicle(ctx,selection={}){
+  if(active.get(ctx.src)!==ctx.session||!nearby(ctx.src,ctx.session.npc,15))throw new Error('Restez près du mécanicien');
+  const npcPos=position(ctx.session.npc),playerPed=GetPlayerPed(String(ctx.src));
+  const [px,py,pz]=GetEntityCoords(playerPed),bucket=GetPlayerRoutingBucket(String(ctx.src));
+  const candidates=[];
+  for(const vehicle of GetAllVehicles()){
+    if(!DoesEntityExist(vehicle)||GetEntityRoutingBucket(vehicle)!==bucket)continue;
+    const [x,y,z]=GetEntityCoords(vehicle),coords={x,y,z};
+    const d=distance(coords,npcPos);
+    if(d>10||distance(coords,{x:px,y:py,z:pz})>12)continue;
+    const netId=NetworkGetNetworkIdFromEntity(vehicle);if(!netId)continue;
+    candidates.push({entity:vehicle,model:GetEntityModel(vehicle),netId,plate:GetVehicleNumberPlateText(vehicle).trim(),distance:d});
+  }
+  return selectVehicle(candidates,selection);
 }
 function finishJob(token,result){
   const pending=pendingJobs.get(token);if(!pending)return;
@@ -32,20 +39,23 @@ const mechanic=new MechanicJob({inspect:inspectVehicle,
   const token=require('node:crypto').randomUUID();
   const pending={ctx,quote,resolve,timer:null,stage:'walking'};pendingJobs.set(token,pending);
   pending.timer=setTimeout(()=>finishJob(token,{ok:false,error:'Le mécanicien n’a pas atteint le capot'}),20000);
-  emitNet('fivemai:jobStart',ctx.src,{token,netId:quote.vehicle.netId,npcId:ctx.session.npc.id,npcNetId:ctx.session.npc.netId});
+  emitNet('fivemai:jobStart',ctx.src,{token,netId:quote.vehicle.netId,npcId:ctx.session.npc.id,npcNetId:ctx.session.npc.netId,service:quote.service,plate:quote.vehicle.plate});
  }),remember:(ctx,text)=>memory.add(ctx.session.player,ctx.session.npc.id,'service',text)});
 jobs.register(mechanic);
 exports('RegisterJob',job=>{jobs.register(job);return true;});
-onNet('fivemai:jobArrived',(token,success)=>{
+onNet('fivemai:jobArrived',(token,success,reason)=>{
  const src=Number(global.source),pending=pendingJobs.get(token);
  if(!pending||pending.ctx.src!==src||pending.stage!=='walking')return;
- if(success!==true)return finishJob(token,{ok:false,error:'Le mécanicien ne peut pas rejoindre le capot ou le véhicule a bougé'});
+ if(success!==true){
+  const reasons={control:'Impossible de prendre le contrôle du PNJ ou du véhicule',hood:'Le capot ne peut pas être ouvert sur ce véhicule',moved:'Le véhicule a bougé',path:'Le mécanicien ne peut pas rejoindre le capot'};
+  return finishJob(token,{ok:false,error:reasons[reason]||'Le mécanicien ne peut pas rejoindre le capot ou le véhicule a bougé'});
+ }
  try{
-  if(inspectVehicle(pending.ctx).netId!==pending.quote.vehicle.netId)throw new Error('Véhicule changé');
+  if(inspectVehicle(pending.ctx,{selected:pending.quote.vehicle}).netId!==pending.quote.vehicle.netId)throw new Error('Véhicule changé');
   clearTimeout(pending.timer);pending.stage='working';
   pending.timer=setTimeout(()=>{
    try{
-    if(inspectVehicle(pending.ctx).netId!==pending.quote.vehicle.netId)throw new Error('Véhicule changé pendant l’intervention');
+    if(inspectVehicle(pending.ctx,{selected:pending.quote.vehicle}).netId!==pending.quote.vehicle.netId)throw new Error('Véhicule changé pendant l’intervention');
     pending.stage='applying';
     pending.timer=setTimeout(()=>finishJob(token,{ok:false,error:'Application du service non confirmée'}),8000);
     const {ctx,quote}=pending;
@@ -58,7 +68,7 @@ onNet('fivemai:jobResult',(token,success)=>{
  const src=Number(global.source),pending=pendingJobs.get(token);
  if(!pending||pending.ctx.src!==src||pending.stage!=='applying')return;
  try{
-  if(inspectVehicle(pending.ctx).netId!==pending.quote.vehicle.netId)throw new Error('Véhicule changé');
+  if(inspectVehicle(pending.ctx,{selected:pending.quote.vehicle}).netId!==pending.quote.vehicle.netId)throw new Error('Véhicule changé');
   finishJob(token,{ok:success===true,error:success===true?undefined:'Le client n’a pas pu appliquer le service'});
  }catch(e){finishJob(token,{ok:false,error:e.message});}
 });
