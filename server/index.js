@@ -4,7 +4,7 @@ const root=GetResourcePath(GetCurrentResourceName());
 // FiveM evaluates scripts with a synthetic module at the resource root.
 const resourceRequire=require('node:module').createRequire(path.join(root,'package.json'));
 const WebSocket=resourceRequire('ws');
-const {MemoryStore,sessionConfig,distance,openAIError,modelHash,errorMessage,behaviorInstructions,validBehavior}=resourceRequire('./server/core.js');
+const {MemoryStore,sessionConfig,distance,openAIError,modelHash,errorMessage,behaviorInstructions,validBehavior,validBehaviorCause}=resourceRequire('./server/core.js');
 const {JobRegistry,MechanicJob,ToolTurnCoordinator,selectVehicle}=resourceRequire('./server/jobs.js');
 const {ProfileStore}=resourceRequire('./server/profiles.js');
 const config=JSON.parse(fs.readFileSync(path.join(root,'config.json'),'utf8'));
@@ -166,7 +166,7 @@ async function stop(src) {
     catch { console.warn('[fivemai] Impossible de confirmer la fermeture OpenAI.'); }
   }
 }
-function sessionInstructions(s){return sessionConfig(config,s.npc,[...memory.get('world',s.npc.id).slice(-10),...memory.get(s.player,s.npc.id).slice(-20)],jobs.tools(s.npc.jobId),s.behavior).instructions;}
+function sessionInstructions(s){return sessionConfig(config,s.npc,[...memory.get('world',s.npc.id).slice(-10),...memory.get(s.player,s.npc.id).slice(-20)],jobs.tools(s.npc.jobId),s.behavior,s.behaviorCause).instructions;}
 function maybeEmotionalReply(src,s){
  if(active.get(src)!==s||!s.emotionReplyPending||s.awaitingBehaviorUpdate||s.responseActive||s.playerSpeaking||s.toolTurn?.pending||s.toolTurn?.outputs||s.ws?.readyState!==WebSocket.OPEN)return;
  s.emotionReplyPending=false;s.responseActive=true;s.ws.send(JSON.stringify({type:'response.create'}));
@@ -180,10 +180,10 @@ onNet('fivemai:speaking',speaking=>{
  const s=active.get(Number(global.source));if(!s)return;
  s.playerSpeaking=speaking===true;if(s.playerSpeaking)s.emotionReplyPending=false;
 });
-onNet('fivemai:behavior',(npcId,state,speaking)=>{
+onNet('fivemai:behavior',(npcId,state,speaking,cause='none')=>{
  const src=Number(global.source),s=active.get(src);
- if(!s||s.npc.id!==npcId||!validBehavior(state)||!nearby(src,s.npc,50)||s.behavior===state)return;
- s.behavior=state;s.playerSpeaking=speaking===true;
+ if(!s||s.npc.id!==npcId||!validBehavior(state)||!validBehaviorCause(cause)||!nearby(src,s.npc,50)||(s.behavior===state&&(s.behaviorCause||'none')===cause))return;
+ s.behavior=state;s.behaviorCause=cause;s.playerSpeaking=speaking===true;
  if(state!=='calm')for(const [token,pending]of pendingJobs)if(pending.ctx.src===src)finishJob(token,{ok:false,error:'Le PNJ a peur ou se bat; intervention annulée'});
  if(state==='calm')s.emotionReplyPending=false;
  if(s.ws?.readyState!==WebSocket.OPEN)return;
@@ -194,7 +194,7 @@ onNet('fivemai:behavior',(npcId,state,speaking)=>{
   if(s.outputPlaying)s.ws.send(JSON.stringify({type:'output_audio_buffer.clear'}));
  }
 });
-onNet('fivemai:offer',async (npcId,sdp,behavior='calm',speaking=false)=>{
+onNet('fivemai:offer',async (npcId,sdp,behavior='calm',speaking=false,cause='none')=>{
   const src=Number(global.source);
   const npc=lookup(npcId);
   if (!npc || typeof sdp!=='string' || sdp.length>40000 || !sdp.startsWith('v=0') || !nearby(src,npc)) return emitNet('fivemai:error',src,'PNJ inaccessible ou requête invalide.');
@@ -204,13 +204,13 @@ onNet('fivemai:offer',async (npcId,sdp,behavior='calm',speaking=false)=>{
   if (!player || !key()) return emitNet('fivemai:error',src,'Identifiant joueur ou clé OpenAI serveur manquante.');
   cooldown.set(src,Date.now());
   const initialBehavior=validBehavior(behavior)?behavior:'calm';
-  const s={npc,player,behavior:initialBehavior,playerSpeaking:speaking===true,responseActive:false,outputPlaying:false,emotionReplyPending:false,awaitingBehaviorUpdate:false,callId:null,ws:null,timer:null,remembered:new Set()}; active.set(src,s);npcLocks.set(npc.id,src);
+  const s={npc,player,behavior:initialBehavior,behaviorCause:validBehaviorCause(cause)?cause:'none',playerSpeaking:speaking===true,responseActive:false,outputPlaying:false,emotionReplyPending:false,awaitingBehaviorUpdate:false,callId:null,ws:null,timer:null,remembered:new Set()}; active.set(src,s);npcLocks.set(npc.id,src);
   s.timer=setTimeout(()=>void stop(src),config.maxSessionSeconds*1000);
   try {
     const body=new FormData();
     // The API expects form fields, not uploaded files with filenames.
     body.set('sdp',sdp);
-    body.set('session',JSON.stringify(sessionConfig(config,npc,[...memory.get('world',npc.id).slice(-10),...memory.get(player,npc.id).slice(-20)],jobs.tools(npc.jobId),s.behavior)));
+    body.set('session',JSON.stringify(sessionConfig(config,npc,[...memory.get('world',npc.id).slice(-10),...memory.get(player,npc.id).slice(-20)],jobs.tools(npc.jobId),s.behavior,s.behaviorCause)));
     const result=await fetch('https://api.openai.com/v1/realtime/calls',{method:'POST',headers:{Authorization:`Bearer ${key()}`},body,signal:AbortSignal.timeout(20000)});
     if (!result.ok) throw await openAIError(result,key());
     const answer=await result.text();
@@ -255,7 +255,7 @@ onNet('fivemai:offer',async (npcId,sdp,behavior='calm',speaking=false)=>{
         toolTurn.complete();
       }catch{console.warn('[fivemai] Événement outil illisible.');}
     });
-    if(s.behavior!==initialBehavior)pushBehavior(s);
+    if(s.behavior!==initialBehavior||s.behaviorCause!==cause)pushBehavior(s);
     emitNet('fivemai:answer',src,answer);
   } catch(e) {
     console.warn(`[fivemai] ${e.message}`);

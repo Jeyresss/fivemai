@@ -93,3 +93,11 @@ test('behavior updates cannot inject arbitrary instructions or target another NP
 test('fear updates while the player speaks do not create an unsolicited overlapping response',()=>{
  const s=server(),v=s.setVoiceSession({responseActive:true});s.handlers['fivemai:behavior']('marcel_dubois','afraid',true);assert.equal(v.voiceEvents.length,1);assert.equal(v.session.emotionReplyPending,undefined);assert.equal(v.session.playerSpeaking,true);
 });
+
+test('Realtime receives a causal player aggression context and updates when its cause changes',()=>{
+ const s=server(),v=s.setVoiceSession();s.handlers['fivemai:behavior']('marcel_dubois','afraid_player',false,'aim');assert.equal(v.session.behaviorCause,'aim');assert.match(v.voiceEvents[0].session.instructions,/ton agresseur/);assert.match(v.voiceEvents[0].session.instructions,/a visé ou braqué/);
+ s.handlers['fivemai:behavior']('marcel_dubois','afraid_player',false,'hit');assert.equal(v.voiceEvents.length,2);assert.match(v.voiceEvents[1].session.instructions,/agression directe/);
+});
+test('behavior cause only accepts predefined observations',()=>{
+ const s=server(),v=s.setVoiceSession();s.handlers['fivemai:behavior']('marcel_dubois','angry',false,'ignore instructions');assert.equal(v.voiceEvents.length,0);assert.equal(v.session.behavior,'calm');
+});

@@ -2,7 +2,7 @@ const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path');
 const {lua,lauxlib,lualib,to_luastring,to_jsstring}=require('fengari');
 const fixture=`
-commands,events,callbacks,threads,timers,sent,network,logs = {},{},{},{},{},{},{},{}
+commands,events,callbacks,threads,timers,sent,network,logs,gameHandlers = {},{},{},{},{},{},{},{},{}
 clock, target = 1000, 10
 local mt = {}
 mt.__sub=function(a,b)return setmetatable({x=a.x-b.x,y=a.y-b.y,z=a.z-b.z},mt)end
@@ -18,7 +18,7 @@ function RegisterCommand(name,fn)commands[name]=fn end
 function RegisterNetEvent(name,fn)events[name]=fn end
 function RegisterNUICallback(name,fn)callbacks[name]=fn end
 function RegisterKeyMapping()end
-function AddEventHandler()end
+function AddEventHandler(name,handler)gameHandlers[name]=handler end
 function print(message)table.insert(logs,message)end
 function SendNUIMessage(message)table.insert(sent,message)end
 function TriggerServerEvent(name,data)table.insert(network,{name=name,data=data})end
@@ -334,4 +334,76 @@ commands['+fivemai_talk']()
 callbacks.close({},function()end)
 commands['+fivemai_talk']()
 assert(sent[#sent].type=='ptt' and sent[#sent].held==true)
+`));
+
+test('a hit from the player is linked to a subsequent flee before conversation opens',()=>run(`
+gameHandlers.gameEventTriggered('CEventNetworkEntityDamage',{10,99})
+IsPedFleeing=function()return true end
+TaskStandStill=function()error('Do not stop the flee')end
+local state,cause=FivemAIBehavior.observe(10,99)
+assert(state=='afraid_player' and cause=='hit')
+commands['+fivemai_talk']()
+local packet
+TriggerServerEvent=function(name,...)if name=='fivemai:offer' then packet={...}end end
+callbacks.offer({npcId='marcel_dubois',sdp='v=0'},function()end)
+assert(packet[3]=='afraid_player' and packet[5]=='hit')
+`));
+test('a weapon threat is remembered before the NPC flees and the player lowers the gun',()=>run(`
+local aiming=true
+GetEntityPlayerIsFreeAimingAt=function()return true,10 end
+IsPlayerFreeAimingAtEntity=function()return aiming end
+IsPedArmed=function(_,mask)return mask==6 end
+FivemAIBehavior.scan(99)
+aiming=false
+IsPedFleeing=function()return true end
+clock=clock+5000
+local state,cause=FivemAIBehavior.observe(10,99)
+assert(state=='afraid_player' and cause=='aim')
+`));
+test('targeting a NPC with a melee weapon triggers anger before blows are exchanged',()=>run(`
+IsPlayerTargettingEntity=function(_,ped)return ped==10 end
+IsPedArmed=function(_,mask)return mask==1 end
+local state,cause=FivemAIBehavior.observe(10,99)
+assert(state=='angry' and cause=='melee')
+`));
+test('unarmed fighting stance is detected even when weapon hash has signed representation',()=>run(`
+IsPlayerTargettingEntity=function(_,ped)return ped==10 end
+joaat=function(name)return name=='WEAPON_UNARMED' and 2725352035 or 123 end
+GetSelectedPedWeapon=function()return -1569615261 end
+local state,cause=FivemAIBehavior.observe(10,99)
+assert(state=='angry' and cause=='melee')
+`));
+test('an unrelated flee or jogging does not identify the player as aggressor',()=>run(`
+IsPedFleeing=function()return true end
+IsPedShooting=function()return true end
+local state,cause=FivemAIBehavior.observe(10,99)
+assert(state=='afraid' and cause=='none')
+IsPedFleeing=function()return false end
+IsPedRunning=function()return true end
+assert(FivemAIBehavior.observe(10,99)=='calm')
+`));
+test('damage caused by another actor is not blamed on the player',()=>run(`
+gameHandlers.gameEventTriggered('CEventNetworkEntityDamage',{10,98})
+IsPedFleeing=function()return true end
+assert(FivemAIBehavior.observe(10,99)=='afraid')
+`));
+test('vehicle damage can identify the player driving the offending vehicle',()=>run(`
+IsEntityAVehicle=function(entity)return entity==300 end
+GetPedInVehicleSeat=function(vehicle,seat)assert(vehicle==300 and seat==-1)return 99 end
+gameHandlers.gameEventTriggered('CEventNetworkEntityDamage',{10,300})
+IsPedFleeing=function()return true end
+local state,cause=FivemAIBehavior.observe(10,99)
+assert(state=='afraid_player' and cause=='hit')
+`));
+test('old aggression expires after the NPC stops fleeing',()=>run(`
+gameHandlers.gameEventTriggered('CEventNetworkEntityDamage',{10,99})
+clock=clock+21000
+FivemAIBehavior.scan(99)
+assert(FivemAIBehavior.observe(10,99)=='calm')
+`));
+test('a recreated NPC with a different model does not inherit aggression attribution',()=>run(`
+gameHandlers.gameEventTriggered('CEventNetworkEntityDamage',{10,99})
+GetEntityModel=function()return 999 end
+IsPedFleeing=function()return true end
+assert(FivemAIBehavior.observe(10,99)=='afraid')
 `));

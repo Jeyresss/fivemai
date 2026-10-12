@@ -1,14 +1,79 @@
 -- Keep behavior helpers local to the entry script; do not depend on another script loading first.
-local FivemAIBehavior = {held={}, controlAttempts={}}
+local FivemAIBehavior = {held={}, controlAttempts={}, threats={}}
 local function flag(name, ...)
     local fn = _G[name]
     return type(fn) == 'function' and fn(...) or false
 end
+local function getter(name, ...)
+    local fn = _G[name]
+    if type(fn) == 'function' then return fn(...) end
+end
+local function playerIndex()
+    return type(PlayerId) == 'function' and PlayerId() or -1
+end
+local function recentThreat(ped, player)
+    local threat = FivemAIBehavior.threats[ped]
+    if not threat then return nil end
+    if not DoesEntityExist(ped) or getter('GetEntityModel', ped) ~= threat.model then FivemAIBehavior.threats[ped] = nil return nil end
+    if GetGameTimer() - threat.at > 20000 then FivemAIBehavior.threats[ped] = nil return nil end
+    return threat.player == player and threat or nil
+end
+local function rememberThreat(ped, player, cause)
+    local previous = recentThreat(ped, player)
+    if previous and previous.cause == 'hit' and cause ~= 'hit' then previous.at = GetGameTimer() return end
+    FivemAIBehavior.threats[ped] = {player=player, cause=cause, at=GetGameTimer(), model=getter('GetEntityModel', ped)}
+end
+function FivemAIBehavior.recordAttack(victim, attacker)
+    if not victim or victim == 0 or not DoesEntityExist(victim) or flag('IsPedAPlayer', victim) then return end
+    if type(IsEntityAPed) == 'function' and not IsEntityAPed(victim) then return end
+    if flag('IsEntityAVehicle', attacker) then attacker = getter('GetPedInVehicleSeat', attacker, -1) end
+    if type(attacker) == 'number' and attacker > 0 and DoesEntityExist(attacker) then rememberThreat(victim, attacker, 'hit') end
+end
+AddEventHandler('gameEventTriggered', function(name, args)
+    if name == 'CEventNetworkEntityDamage' and type(args) == 'table' then FivemAIBehavior.recordAttack(args[1], args[2]) end
+end)
 function FivemAIBehavior.observe(ped, player)
-    if flag('IsPedFleeing', ped) or flag('IsPedRagdoll', ped) or flag('IsPedBeingStunned', ped, 0) then return 'afraid' end
-    if flag('IsPedInCombat', ped, player) then return 'angry' end
-    if flag('IsPedInCombat', ped, 0) or flag('IsPedInMeleeCombat', ped) then return 'combat' end
-    return 'calm'
+    local a, b = GetEntityCoords(ped), GetEntityCoords(player)
+    local dx, dy, dz = a.x-b.x, a.y-b.y, a.z-b.z
+    local nearby = dx*dx + dy*dy + dz*dz <= 30*30
+    local targeting = nearby and flag('IsPlayerTargettingEntity', playerIndex(), ped)
+    local armedAim = nearby and (flag('IsPlayerFreeAimingAtEntity', playerIndex(), ped) or targeting) and flag('IsPedArmed', player, 6)
+    local meleeTarget = getter('GetMeleeTargetForPed', player)
+    local weapon = getter('GetSelectedPedWeapon', player)
+    local unarmed = type(weapon) == 'number' and weapon % 4294967296 == joaat('WEAPON_UNARMED') % 4294967296
+    local meleePreparation = nearby and targeting and (flag('IsPedArmed', player, 1) or unarmed)
+    local playerFighting = flag('IsPedInCombat', player, ped) or (flag('IsPedInMeleeCombat', player) and meleeTarget == ped)
+    if armedAim then rememberThreat(ped, player, 'aim') end
+    if meleePreparation or playerFighting then rememberThreat(ped, player, 'melee') end
+    local threat = recentThreat(ped, player)
+    if flag('IsPedFleeing', ped) then
+        if threat then threat.at = GetGameTimer() return 'afraid_player', threat.cause end
+        return 'afraid', 'none'
+    end
+    if flag('IsPedInCombat', ped, player) or playerFighting then return 'angry', threat and threat.cause or 'combat' end
+    if meleePreparation then return 'angry', 'melee' end
+    if flag('IsPedInCombat', ped, 0) or flag('IsPedInMeleeCombat', ped) then return 'combat', 'none' end
+    if armedAim then return 'threatened', threat and threat.cause or 'aim' end
+    if flag('IsPedRagdoll', ped) or flag('IsPedBeingStunned', ped, 0) then return threat and 'afraid_player' or 'afraid', threat and threat.cause or 'none' end
+    if threat then return 'threatened', threat.cause end
+    return 'calm', 'none'
+end
+function FivemAIBehavior.scan(player)
+    -- Remember a targeted threat even before the player opens a conversation.
+    for _, name in ipairs({'GetEntityPlayerIsFreeAimingAt', 'GetPlayerTargetEntity'}) do
+        local fn = _G[name]
+        if type(fn) == 'function' then
+            local ok, targeted, entity = pcall(fn, playerIndex())
+            if ok and targeted and type(entity) == 'number' and entity ~= 0 and DoesEntityExist(entity) and flag('IsPedHuman', entity) then FivemAIBehavior.observe(entity, player) end
+        end
+    end
+    local melee = getter('GetMeleeTargetForPed', player)
+    if type(melee) == 'number' and melee ~= 0 and DoesEntityExist(melee) and flag('IsPedInMeleeCombat', player) then FivemAIBehavior.observe(melee, player) end
+    for ped, threat in pairs(FivemAIBehavior.threats) do
+        if not DoesEntityExist(ped) or getter('GetEntityModel', ped) ~= threat.model then FivemAIBehavior.threats[ped] = nil
+        elseif GetGameTimer() - threat.at > 20000 then FivemAIBehavior.threats[ped] = nil
+        elseif flag('IsPedFleeing', ped) then threat.at = GetGameTimer() end
+    end
 end
 function FivemAIBehavior.release(ped, resume, fixed)
     if not ped then return end
@@ -25,10 +90,10 @@ function FivemAIBehavior.release(ped, resume, fixed)
     elseif type(TaskWanderStandard) == 'function' then TaskWanderStandard(ped, 10.0, 10) end
 end
 function FivemAIBehavior.pose(ped, player, close, fixed, working)
-    local state = FivemAIBehavior.observe(ped, player)
+    local state, cause = FivemAIBehavior.observe(ped, player)
     if state ~= 'calm' or not close or working then
         FivemAIBehavior.release(ped, not working and state == 'calm', fixed)
-        return state
+        return state, cause
     end
     if NetworkGetEntityIsNetworked(ped) and not flag('NetworkHasControlOfEntity', ped) then
         local now = GetGameTimer()
@@ -36,7 +101,7 @@ function FivemAIBehavior.pose(ped, player, close, fixed, working)
             FivemAIBehavior.controlAttempts[ped] = now
             if type(NetworkRequestControlOfEntity) == 'function' then NetworkRequestControlOfEntity(ped) end
         end
-        return state
+        return state, cause
     end
     local now = GetGameTimer()
     local held = FivemAIBehavior.held[ped]
@@ -51,14 +116,14 @@ function FivemAIBehavior.pose(ped, player, close, fixed, working)
         if type(TaskStandStill) == 'function' then TaskStandStill(ped, 1400) end
         if type(TaskLookAtEntity) == 'function' then TaskLookAtEntity(ped, player, 1500, 2048, 3) end
     end
-    return state
+    return state, cause
 end
 
 local config = json.decode(LoadResourceFile(GetCurrentResourceName(), 'config.json'))
 local peds = {}
 local talking = false
 local workingJob = nil
-local currentMood, moodChangedAt = 'calm', 0
+local currentMood, currentCause, moodChangedAt = 'calm', 'none', 0
 CreateThread(function()
     for _, npc in ipairs(config.npcs) do
         local model = joaat(npc.model)
@@ -153,7 +218,7 @@ local function deliverOpen()
 end
 local function openConversation(profile, ped)
     currentNpc, currentPed, candidate = profile, ped, nil
-    currentMood = FivemAIBehavior.pose(ped, PlayerPedId(), true, peds[profile.id] == ped, workingJob ~= nil)
+    currentMood, currentCause = FivemAIBehavior.pose(ped, PlayerPedId(), true, peds[profile.id] == ped, workingJob ~= nil)
     moodChangedAt = GetGameTimer()
     uiSession = uiSession + 1
     local session = uiSession
@@ -252,8 +317,10 @@ RegisterNetEvent('fivemai:position', function(coords)
 end)
 RegisterKeyMapping('+fivemai_talk', 'Maintenir pour parler au PNJ (IA)', 'keyboard', 'N')
 CreateThread(function()
+    local nextScan = 0
     while true do
         Wait(100)
+        if GetGameTimer() >= nextScan then FivemAIBehavior.scan(PlayerPedId()) nextScan = GetGameTimer() + 400 end
         if currentNpc then
             local ped = currentPed
             if currentNpc.netId and NetworkDoesEntityExistWithNetworkId(currentNpc.netId) then ped = NetToPed(currentNpc.netId) currentPed = ped end
@@ -263,10 +330,10 @@ CreateThread(function()
                 local observed = FivemAIBehavior.observe(ped, PlayerPedId())
                 if observed ~= 'calm' then moodChangedAt = GetGameTimer() end
                 local recovered = currentMood == 'calm' or GetGameTimer() - moodChangedAt >= 1800
-                local mood = FivemAIBehavior.pose(ped, PlayerPedId(), distance <= config.interactionDistance + 1 and recovered, peds[currentNpc.id] == ped, workingJob ~= nil)
-                if mood ~= currentMood and (mood ~= 'calm' or GetGameTimer() - moodChangedAt >= 1800) then
-                    currentMood = mood
-                    TriggerServerEvent('fivemai:behavior', currentNpc.id, mood, pressed)
+                local mood, cause = FivemAIBehavior.pose(ped, PlayerPedId(), distance <= config.interactionDistance + 1 and recovered, peds[currentNpc.id] == ped, workingJob ~= nil)
+                if (mood ~= currentMood or cause ~= currentCause) and (mood ~= 'calm' or GetGameTimer() - moodChangedAt >= 1800) then
+                    currentMood, currentCause = mood, cause
+                    TriggerServerEvent('fivemai:behavior', currentNpc.id, mood, pressed, cause)
                 end
             end
             SendNUIMessage({type='proximity', distance=distance, fullDistance=config.voiceFullDistance or 3, maxDistance=config.voiceMaxDistance or 18})
@@ -279,8 +346,9 @@ CreateThread(function()
     end
 end)
 RegisterNUICallback('offer', function(data, cb)
-    local mood = currentPed and DoesEntityExist(currentPed) and FivemAIBehavior.observe(currentPed, PlayerPedId()) or 'calm'
-    TriggerServerEvent('fivemai:offer', data.npcId, data.sdp, mood, pressed)
+    local mood, cause = 'calm', 'none'
+    if currentPed and DoesEntityExist(currentPed) then mood, cause = FivemAIBehavior.observe(currentPed, PlayerPedId()) end
+    TriggerServerEvent('fivemai:offer', data.npcId, data.sdp, mood, pressed, cause)
     cb({ok=true})
 end)
 RegisterNUICallback('close', function(_, cb)
