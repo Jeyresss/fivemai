@@ -20,6 +20,7 @@ CreateThread(function()
 end)
 local currentNpc, currentPed, candidate = nil, nil, nil
 local pressed = false
+local requestSerial = 0
 local function nearestNpc()
     local pos = GetEntityCoords(PlayerPedId())
     local nearest, best = nil, config.interactionDistance
@@ -40,6 +41,23 @@ local function closeConversation()
     SendNUIMessage({type='closed'})
     TriggerServerEvent('fivemai:stop')
 end
+local function openConversation(profile, ped)
+    currentNpc, currentPed, candidate = profile, ped, nil
+    SendNUIMessage({type='open', microphone=GetResourceKvpString('fivemai_microphone'), npc={id=profile.id, name=profile.firstName .. ' ' .. profile.lastName}})
+    SendNUIMessage({type='ptt', held=pressed})
+end
+local function requestProfile(nearest)
+    if candidate ~= nearest then return end
+    nearest.attempt = (nearest.attempt or 0) + 1
+    local attempt = nearest.attempt
+    TriggerServerEvent('fivemai:resolve', {netId=nearest.netId, requestId=nearest.requestId})
+    SetTimeout(5000, function()
+        if candidate == nearest and nearest.attempt == attempt then
+            print('[fivemai] Le serveur ne répond pas à la résolution du profil. Vérifiez les erreurs fivemai dans la console txAdmin et que toute la ressource a été mise à jour.')
+            closeConversation()
+        end
+    end)
+end
 RegisterCommand('+fivemai_talk', function()
     if pressed then return end
     local nearest = nearestNpc()
@@ -48,27 +66,26 @@ RegisterCommand('+fivemai_talk', function()
     pressed = true
     if not talking then
         talking, candidate = true, nearest
-        CreateThread(function()
-            local target = {id=nearest.id}
-            if not nearest.id then
-                if not NetworkGetEntityIsNetworked(nearest.ped) then NetworkRegisterEntityAsNetworked(nearest.ped) end
-                local deadline = GetGameTimer() + 1500
-                while DoesEntityExist(nearest.ped) and not NetworkGetEntityIsNetworked(nearest.ped) and GetGameTimer() < deadline do Wait(50) end
-                if not DoesEntityExist(nearest.ped) or not NetworkGetEntityIsNetworked(nearest.ped) then
-                    print('[fivemai] Ce PNJ ne peut pas être synchronisé avec le serveur.')
-                    closeConversation()
-                    return
-                end
-                target.netId = NetworkGetNetworkIdFromEntity(nearest.ped)
+        -- Fixed profiles already exist in shared config; preserve their original
+        -- startup path. The offer is still authorized on the server.
+        if nearest.id then
+            for _, profile in ipairs(config.npcs) do
+                if profile.id == nearest.id then openConversation(profile, nearest.ped) return end
             end
-            if candidate ~= nearest then return end
-            TriggerServerEvent('fivemai:resolve', target)
-            SetTimeout(5000, function()
-                if candidate == nearest and not currentNpc then
-                    print('[fivemai] Résolution du profil expirée.')
-                    closeConversation()
-                end
-            end)
+        end
+        requestSerial = requestSerial + 1
+        nearest.requestId = requestSerial
+        CreateThread(function()
+            if not NetworkGetEntityIsNetworked(nearest.ped) then NetworkRegisterEntityAsNetworked(nearest.ped) end
+            local deadline = GetGameTimer() + 1500
+            while DoesEntityExist(nearest.ped) and not NetworkGetEntityIsNetworked(nearest.ped) and GetGameTimer() < deadline do Wait(50) end
+            if not DoesEntityExist(nearest.ped) or not NetworkGetEntityIsNetworked(nearest.ped) then
+                print('[fivemai] Ce PNJ ne peut pas être synchronisé avec le serveur.')
+                closeConversation()
+                return
+            end
+            nearest.netId = NetworkGetNetworkIdFromEntity(nearest.ped)
+            requestProfile(nearest)
         end)
     else
         SendNUIMessage({type='ptt', held=true})
@@ -78,12 +95,18 @@ RegisterCommand('-fivemai_talk', function()
     pressed = false
     SendNUIMessage({type='ptt', held=false})
 end, false)
-RegisterNetEvent('fivemai:profile', function(profile)
-    if not talking or not candidate then return end
-    currentNpc, currentPed = profile, candidate.ped
-    candidate = nil
-    SendNUIMessage({type='open', microphone=GetResourceKvpString('fivemai_microphone'), npc={id=profile.id, name=profile.firstName .. ' ' .. profile.lastName}})
-    SendNUIMessage({type='ptt', held=pressed})
+RegisterNetEvent('fivemai:resolved', function(result)
+    if not candidate or result.requestId ~= candidate.requestId then return end
+    local nearest = candidate
+    if result.ok and type(result.profile) == 'table' then
+        openConversation(result.profile, nearest.ped)
+    elseif result.retryable and nearest.attempt < 3 then
+        print('[fivemai] ' .. tostring(result.error) .. '. Nouvelle vérification dans une seconde.')
+        SetTimeout(1000, function() requestProfile(nearest) end)
+    else
+        print('[fivemai] Profil indisponible : ' .. tostring(result.error or 'erreur inconnue'))
+        closeConversation()
+    end
 end)
 RegisterNetEvent('fivemai:position', function(coords)
     if currentNpc then currentNpc.coords = coords end
@@ -115,7 +138,11 @@ RegisterNUICallback('close', function(_, cb)
     cb({ok=true})
 end)
 RegisterNetEvent('fivemai:answer', function(sdp) SendNUIMessage({type='answer', sdp=sdp}) end)
-RegisterNetEvent('fivemai:error', function(message) SendNUIMessage({type='error', message=message}) end)
+RegisterNetEvent('fivemai:error', function(message)
+    local text = type(message) == 'string' and message ~= '' and message or 'Erreur serveur sans détail. Consultez la console txAdmin.'
+    print('[fivemai] ' .. text)
+    SendNUIMessage({type='error', message=text})
+end)
 RegisterNetEvent('fivemai:closed', function()
     talking, pressed, currentNpc, currentPed, candidate = false, false, nil, nil, nil
     SendNUIMessage({type='closed'})

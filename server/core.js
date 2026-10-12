@@ -1,5 +1,13 @@
 const fs = require('node:fs');
 const path = require('node:path');
+function modelHash(name){
+ let hash=0;for(const char of name.toLowerCase()){hash=(hash+char.charCodeAt(0))|0;hash=(hash+(hash<<10))|0;hash^=hash>>>6;}
+ hash=(hash+(hash<<3))|0;hash^=hash>>>11;hash=(hash+(hash<<15))|0;return hash>>>0;
+}
+function errorMessage(error){
+ const text=typeof error==='string'?error:error?.message;
+ return typeof text==='string'&&text.trim()?text:'Erreur serveur sans message exploitable';
+}
 function distance(a,b) { return Math.hypot(a.x-b.x,a.y-b.y,a.z-b.z); }
 class MemoryStore {
   constructor(file) {
@@ -35,4 +43,4 @@ async function openAIError(response,secret='') {
   safe=safe.replace(/sk-[A-Za-z0-9_-]+/g,'[REDACTED]').replace(/[\r\n\x00-\x1f]/g,' ').slice(0,700);
   return new Error(`OpenAI HTTP ${response.status}${safe ? ': '+safe : ' (aucun détail JSON exploitable)'}`);
 }
-module.exports={MemoryStore,sessionConfig,distance,openAIError};
+module.exports={MemoryStore,sessionConfig,distance,openAIError,modelHash,errorMessage};

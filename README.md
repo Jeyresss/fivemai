@@ -116,3 +116,9 @@ Tests en jeu à réaliser après mise à jour :
 5. Vérifier microphone, erreurs réseau, déconnexion, changement de bucket, durée limite et arrêt de ressource.
 
 Le JSON convient à un prototype mono-instance. Sauvegarder `data/`, limiter les droits d’accès et définir une politique de conservation; les fichiers ne sont pas chiffrés. Le serveur limite les sessions simultanées à huit et les ouvertures à une toutes les dix secondes par joueur. Les processus Realtime sont à redémarrer après un redéploiement; les données conservées ne sauvegardent pas les appels actifs.
+
+### Profil qui ne se résout pas
+
+Les PNJ fixes démarrent directement à partir de leur profil configuré; leur appel reste autorisé côté serveur. Les passants utilisent une demande de profil numérotée et attendent un retour explicite. Un PNJ pas encore visible sur le serveur donne lieu à trois tentatives au maximum. Une erreur permanente est affichée dans F8 et détaillée par étape dans txAdmin; les erreurs vides ou les refus dus à la fréquence des demandes ne restent plus silencieux.
+
+Au démarrage, la console serveur doit afficher `[fivemai] Serveur prêt — résolution des profils v2.`. Si F8 indique que le serveur ne répond pas, vérifier d’abord les erreurs de chargement serveur et la mise à jour complète de la ressource, plutôt que modifier le microphone ou la clé OpenAI.

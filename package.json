@@ -8,5 +8,8 @@
   },
   "dependencies": {
     "ws": "8.18.3"
+  },
+  "devDependencies": {
+    "fengari": "^0.1.5"
   }
 }

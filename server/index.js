@@ -4,7 +4,7 @@ const root=GetResourcePath(GetCurrentResourceName());
 // FiveM evaluates scripts with a synthetic module at the resource root.
 const resourceRequire=require('node:module').createRequire(path.join(root,'package.json'));
 const WebSocket=resourceRequire('ws');
-const {MemoryStore,sessionConfig,distance,openAIError}=resourceRequire('./server/core.js');
+const {MemoryStore,sessionConfig,distance,openAIError,modelHash,errorMessage}=resourceRequire('./server/core.js');
 const {JobRegistry,MechanicJob,ToolTurnCoordinator}=resourceRequire('./server/jobs.js');
 const {ProfileStore}=resourceRequire('./server/profiles.js');
 const config=JSON.parse(fs.readFileSync(path.join(root,'config.json'),'utf8'));
@@ -84,29 +84,41 @@ function lookup(id){
   return null;
 }
 onNet('fivemai:resolve',target=>{
-  const src=Number(global.source);
-  if(Date.now()-(resolveCooldown.get(src)||0)<500)return;
+  const src=Number(global.source),requestId=target?.requestId;
+  const reply=result=>emitNet('fivemai:resolved',src,{requestId,...result});
+  if(Date.now()-(resolveCooldown.get(src)||0)<500)return reply({ok:false,retryable:true,error:'Résolution trop rapprochée'});
   resolveCooldown.set(src,Date.now());
+  let stage='validation de la cible';
   try{
     let npc;
     if(target && typeof target.id==='string')npc=config.npcs.find(n=>n.id===target.id);
     else if(config.ambientNPCs && target){
+      if(!Number.isInteger(target.netId)||target.netId<=0)throw new Error('Identifiant réseau PNJ invalide');
+      // A client-side net ID can exist before OneSync exposes the ped on the server.
+      if(!NetworkGetEntityFromNetworkId(target.netId))return reply({ok:false,retryable:true,error:'PNJ pas encore synchronisé avec le serveur'});
+      stage='validation du PNJ réseau';
       const entity=networkPed(target.netId);
       if(!entity||GetEntityHealth(entity)<=0||GetPlayerRoutingBucket(String(src))!==GetEntityRoutingBucket(entity))throw new Error('PNJ inaccessible');
       const [x,y,z]=GetEntityCoords(entity),[px,py,pz]=GetEntityCoords(GetPlayerPed(String(src)));
       if(distance({x,y,z},{x:px,y:py,z:pz})>config.interactionDistance+1)throw new Error('PNJ trop éloigné');
-      npc=boundProfile(target.netId);
+      stage='lecture du profil';npc=boundProfile(target.netId);
       if(!npc){
-        const model=GetEntityModel(entity);
-        const job=config.jobs?.find(j=>j.models?.some(name=>(GetHashKey(name)>>>0)===(model>>>0)));
+        stage='création du profil';const model=GetEntityModel(entity);
+        const job=config.jobs?.find(j=>j.models?.some(name=>modelHash(name)===(model>>>0)));
         const profile=profiles.create(model,job?.id);
+        stage='association du profil au PNJ';
         bindings.set(target.netId,{id:profile.id,entity});Entity(entity).state.set('fivemai_profile_id',profile.id,true);
         npc={...profile,netId:target.netId};
       }
     }
+    stage='validation de proximité';
     if(!npc||!nearby(src,npc))throw new Error('PNJ inaccessible');
-    emitNet('fivemai:profile',src,{...npc,coords:position(npc)});
-  }catch(e){emitNet('fivemai:error',src,e.message);}
+    reply({ok:true,profile:{...npc,coords:position(npc)}});
+  }catch(e){
+    const message=`${stage}: ${errorMessage(e)}`;
+    console.warn(`[fivemai] Résolution du profil pour joueur ${src}: ${message}`);
+    reply({ok:false,retryable:false,error:message});
+  }
 });
 // Trusted spawn scripts can reattach a saved character after recreating its ped.
 exports('BindNPCProfile',(netId,profileId)=>{
@@ -221,3 +233,5 @@ exports('RecordNPCEvent',(npcId,description)=>{
  for(const s of active.values())if(s.npc.id===npcId&&s.ws?.readyState===WebSocket.OPEN)s.ws.send(JSON.stringify({type:'conversation.item.create',item:{type:'message',role:'system',content:[{type:'input_text',text:`Observation publique fournie par le serveur: ${description}`}]}}));
  return true;
 });
+
+console.log('[fivemai] Serveur prêt — résolution des profils v2.');

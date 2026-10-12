@@ -1,19 +1,19 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const vm=require('node:vm'),fs=require('node:fs'),path=require('node:path');
-function server({near=true,key='',fetchImpl}={}){
+function server({near=true,key='',fetchImpl,entityVisible=true,profileError,now=()=>Date.now()}={}){
  const handlers={},sent=[],saved=[],warnings=[],stateIds=new Map(),storedProfiles=new Map();
  const resourceRoot=path.resolve(__dirname,'..');
  const rootRequire=require('node:module').createRequire(path.join(resourceRoot,'dummy.js'));
- const context={require:id=>id==='node:module'?{createRequire:file=>{
+ const context={Date:{now},require:id=>id==='node:module'?{createRequire:file=>{
    const load=require('node:module').createRequire(file);
-   return name=>{const loaded=load(name);return name==='./server/core.js'?{...loaded,MemoryStore:class{get(){return [];}add(...args){saved.push(args);}}}:name==='./server/profiles.js'?{ProfileStore:class{get(id){return storedProfiles.get(id);}create(model){const p={id:'npc_'+(storedProfiles.size+1),firstName:'Alex',lastName:'Morel',model,jobId:'resident',job:'Habitant',voice:'cedar'};storedProfiles.set(p.id,p);return p;}}}:loaded;};
+   return name=>{const loaded=load(name);return name==='./server/core.js'?{...loaded,MemoryStore:class{get(){return [];}add(...args){saved.push(args);}}}:name==='./server/profiles.js'?{ProfileStore:class{get(id){return storedProfiles.get(id);}create(model){if(profileError!==undefined)throw profileError;const p={id:'npc_'+(storedProfiles.size+1),firstName:'Alex',lastName:'Morel',model,jobId:'resident',job:'Habitant',voice:'cedar'};storedProfiles.set(p.id,p);return p;}}}:loaded;};
  }}:rootRequire(id),
  GetResourcePath:()=>path.resolve(__dirname,'..'),GetCurrentResourceName:()=> 'fivemai',GetConvar:()=>key,
- GetPlayerPed:()=>1,getPlayers:()=>['7'],NetworkGetEntityFromNetworkId:id=>id===101?200:id===102?1:0,DoesEntityExist:()=>true,GetEntityType:()=>1,GetEntityHealth:()=>100,GetEntityRoutingBucket:()=>0,GetEntityModel:()=>123,GetHashKey:()=>456,Entity:entity=>({state:{get fivemai_profile_id(){return stateIds.get(entity);},set(key,value){stateIds.set(entity,value);}}}),
+ GetPlayerPed:()=>1,getPlayers:()=>['7'],NetworkGetEntityFromNetworkId:id=>id===101?(entityVisible?200:0):id===102?1:0,DoesEntityExist:()=>true,GetEntityType:()=>1,GetEntityHealth:()=>100,GetEntityRoutingBucket:()=>0,GetEntityModel:()=>123,GetHashKey:()=>456,Entity:entity=>({state:{get fivemai_profile_id(){return stateIds.get(entity);},set(key,value){stateIds.set(entity,value);}}}),
  GetPlayerRoutingBucket:()=>0,GetEntityCoords:()=>near?[-341.7,-133.5,39]:[0,0,0],getPlayerIdentifiers:()=>['license:test'],
  onNet:(n,h)=>handlers[n]=h,on:()=>{},emitNet:(...args)=>sent.push(args),exports:(n,h)=>handlers[n]=h,
- setInterval:()=>{},setTimeout:()=>0,clearTimeout:()=>{},console:{warn:message=>warnings.push(message)},fetch:fetchImpl||(()=>{throw new Error('Unexpected network');}),FormData,Blob,AbortSignal};
+ setInterval:()=>{},setTimeout:()=>0,clearTimeout:()=>{},console:{log:()=>{},warn:message=>warnings.push(message)},fetch:fetchImpl||(()=>{throw new Error('Unexpected network');}),FormData,Blob,AbortSignal};
  context.global=context;context.source=7;vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../server/index.js'),'utf8'),context);
  return {handlers,sent,saved,warnings,stateIds};
 }
@@ -50,14 +50,22 @@ test('call request uses text form fields and API rejection logs a redacted reaso
 });
 
 test('ambient identity is shared across repeated resolutions of the same network ped',()=>{
- const s=server();s.handlers['fivemai:resolve']({netId:101});const first=s.sent.find(e=>e[0]==='fivemai:profile');assert.ok(first);assert.equal(first[2].id,'npc_1');assert.equal(first[2].netId,101);
- // Bypass the per-player rate limiter by advancing Date.now for this sync test.
- const original=Date.now;Date.now=()=>original()+1000;
- try{s.handlers['fivemai:resolve']({netId:101});assert.equal(s.sent.at(-1)[2].id,first[2].id);}finally{Date.now=original;}
+ let time=1000;const s=server({now:()=>time});s.handlers['fivemai:resolve']({netId:101,requestId:1});const first=s.sent.find(e=>e[0]==='fivemai:resolved');assert.ok(first);assert.equal(first[2].requestId,1);assert.equal(first[2].profile.id,'npc_1');assert.equal(first[2].profile.netId,101);
+ time+=1000;s.handlers['fivemai:resolve']({netId:101,requestId:2});assert.equal(s.sent.at(-1)[2].profile.id,first[2].profile.id);
 });
 test('a player ped cannot acquire an NPC profile',()=>{
- const s=server();s.handlers['fivemai:resolve']({netId:102});assert.equal(s.sent.at(-1)[0],'fivemai:error');assert.equal(s.stateIds.size,0);
+ const s=server();s.handlers['fivemai:resolve']({netId:102});assert.equal(s.sent.at(-1)[0],'fivemai:resolved');assert.equal(s.sent.at(-1)[2].ok,false);assert.equal(s.stateIds.size,0);
 });
 test('a forged profile state cannot bind another existing character',()=>{
- const s=server();s.stateIds.set(200,'another-character');s.handlers['fivemai:resolve']({netId:101});assert.equal(s.sent.at(-1)[2].id,'npc_1');assert.equal(s.stateIds.get(200),'npc_1');
+ const s=server();s.stateIds.set(200,'another-character');s.handlers['fivemai:resolve']({netId:101});assert.equal(s.sent.at(-1)[2].profile.id,'npc_1');assert.equal(s.stateIds.get(200),'npc_1');
+});
+
+test('unsynchronized network ped yields a retryable reply instead of timing out',()=>{
+ const s=server({entityVisible:false});s.handlers['fivemai:resolve']({netId:101,requestId:12});const reply=s.sent.at(-1);assert.equal(reply[0],'fivemai:resolved');assert.equal(reply[2].requestId,12);assert.equal(reply[2].retryable,true);assert.match(reply[2].error,/synchronisé/);
+});
+test('rate limiting replies explicitly to every request',()=>{
+ const s=server();s.handlers['fivemai:resolve']({netId:101,requestId:1});s.handlers['fivemai:resolve']({netId:101,requestId:2});assert.equal(s.sent.at(-1)[2].requestId,2);assert.equal(s.sent.at(-1)[2].retryable,true);
+});
+test('native string errors retain their diagnosis in the resolver reply and server log',()=>{
+ const s=server({profileError:'Native operation failed'});s.handlers['fivemai:resolve']({netId:101,requestId:3});assert.match(s.sent.at(-1)[2].error,/création du profil: Native operation failed/);assert.match(s.warnings[0],/Native operation failed/);
 });

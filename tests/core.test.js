@@ -21,3 +21,10 @@ test('non-JSON API failures do not log raw response bodies',async()=>{
  const error=await openAIError({status:502,json:async()=>{throw new Error('private upstream body');}});
  assert.match(error.message,/HTTP 502/);assert.doesNotMatch(error.message,/private upstream body/);
 });
+
+test('model matching uses a portable GTA JOAAT hash',()=>{
+ const {modelHash}=require('../server/core');assert.equal(modelHash('adder'),3078201489);assert.equal(modelHash('ADDER'),modelHash('adder'));
+});
+test('blank server errors receive a nonempty diagnostic',()=>{
+ const {errorMessage}=require('../server/core');assert.equal(errorMessage('Native failure'),'Native failure');assert.match(errorMessage(new Error('')),/sans message/);
+});
