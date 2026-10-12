@@ -6,7 +6,7 @@ function browser(){
  const elements=new Map(),messages=[],requests=[];let handler,peer;
  const track={enabled:true,stopped:false,stop(){this.stopped=true;}};
  const stream={getAudioTracks:()=>[track],getTracks:()=>[track]};
- const context={console,setTimeout:()=>0,clearTimeout:()=>{},Date,JSON,Boolean,PushToTalk:require('../web/ptt'),
+ const context={console,setTimeout:()=>0,clearTimeout:()=>{},Date,JSON,Boolean,
  document:{getElementById:id=>{if(!elements.has(id))elements.set(id,{hidden:true,textContent:'',play:()=>Promise.resolve()});return elements.get(id);}},
  window:{addEventListener:(_,fn)=>handler=fn},navigator:{mediaDevices:{getUserMedia:async()=>stream}},
  GetParentResourceName:()=> 'fivemai',fetch:async(url,options)=>{requests.push([url,JSON.parse(options.body)]);return {};},

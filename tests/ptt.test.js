@@ -1,6 +1,6 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
-const PushToTalk=require('../web/ptt');
+const PushToTalk=require('../web/app');
 function setup(){
  const sent=[],track={enabled:true},tasks=new Map();let time=0,id=0;
  const ptt=new PushToTalk({send:e=>sent.push(e),track,status:()=>{},now:()=>time,schedule:fn=>{tasks.set(++id,fn);return id;},cancel:id=>tasks.delete(id)});
