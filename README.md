@@ -122,3 +122,7 @@ Le JSON convient à un prototype mono-instance. Sauvegarder `data/`, limiter les
 Les PNJ fixes démarrent directement à partir de leur profil configuré; leur appel reste autorisé côté serveur. Les passants utilisent une demande de profil numérotée et attendent un retour explicite. Un PNJ pas encore visible sur le serveur donne lieu à trois tentatives au maximum. Une erreur permanente est affichée dans F8 et détaillée par étape dans txAdmin; les erreurs vides ou les refus dus à la fréquence des demandes ne restent plus silencieux.
 
 Au démarrage, la console serveur doit afficher `[fivemai] Serveur prêt — résolution des profils v2.`. Si F8 indique que le serveur ne répond pas, vérifier d’abord les erreurs de chargement serveur et la mise à jour complète de la ressource, plutôt que modifier le microphone ou la clé OpenAI.
+
+### Touche de parole et chargement de l’interface
+
+La commande maintenue `+fivemai_talk` et sa commande de relâchement `-fivemai_talk` restent associées à N par défaut, avec modification dans les paramètres FiveM. L’ouverture de l’interface est mise en attente si elle n’est pas encore chargée; son accusé de réception empêche une session bloquée après une pression trop tôt au redémarrage. Les PNJ configurés sont repérés directement et restent utilisables sans parcours de la population ambiante. Une pression hors de portée affiche un motif plutôt que rester silencieuse.

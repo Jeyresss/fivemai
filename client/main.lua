@@ -21,31 +21,69 @@ end)
 local currentNpc, currentPed, candidate = nil, nil, nil
 local pressed = false
 local requestSerial = 0
+local nuiReady, queuedOpen, uiSession = false, nil, 0
 local function nearestNpc()
     local pos = GetEntityCoords(PlayerPedId())
     local nearest, best = nil, config.interactionDistance
-    for _, ped in ipairs(GetGamePool('CPed')) do
+    -- Configured peds must remain usable independently of population scanning.
+    for id, ped in pairs(peds) do
+        if DoesEntityExist(ped) and not IsEntityDead(ped) then
+            local d = #(pos - GetEntityCoords(ped))
+            if d <= best then nearest, best = {ped=ped, id=id}, d end
+        end
+    end
+    if nearest then return nearest end
+    if not config.ambientNPCs then return nil end
+    local ok, pool = pcall(GetGamePool, 'CPed')
+    if not ok or type(pool) ~= 'table' then
+        print('[fivemai] Population PNJ indisponible; les PNJ configurés restent utilisables.')
+        return nil
+    end
+    for _, ped in pairs(pool) do
         if DoesEntityExist(ped) and not IsPedAPlayer(ped) and IsPedHuman(ped) and not IsEntityDead(ped) then
             local d = #(pos - GetEntityCoords(ped))
-            if d < best then
-                local fixedId = nil
-                for id, fixedPed in pairs(peds) do if fixedPed == ped then fixedId = id break end end
-                if fixedId or config.ambientNPCs then nearest, best = {ped=ped, id=fixedId}, d end
-            end
+            if d <= best then nearest, best = {ped=ped}, d end
         end
     end
     return nearest
 end
-local function closeConversation()
+local function closeConversation(notifyServer)
+    uiSession = uiSession + 1
+    queuedOpen = nil
     talking, pressed, currentNpc, currentPed, candidate = false, false, nil, nil, nil
     SendNUIMessage({type='closed'})
-    TriggerServerEvent('fivemai:stop')
+    if notifyServer ~= false then TriggerServerEvent('fivemai:stop') end
+end
+local function deliverOpen()
+    if not nuiReady or not queuedOpen then return end
+    SendNUIMessage(queuedOpen)
+    SendNUIMessage({type='ptt', held=pressed})
 end
 local function openConversation(profile, ped)
     currentNpc, currentPed, candidate = profile, ped, nil
-    SendNUIMessage({type='open', microphone=GetResourceKvpString('fivemai_microphone'), npc={id=profile.id, name=profile.firstName .. ' ' .. profile.lastName}})
-    SendNUIMessage({type='ptt', held=pressed})
+    uiSession = uiSession + 1
+    local session = uiSession
+    queuedOpen = {type='open', sessionId=session, microphone=GetResourceKvpString('fivemai_microphone'), npc={id=profile.id, name=profile.firstName .. ' ' .. profile.lastName}}
+    deliverOpen()
+    SetTimeout(10000, function()
+        if uiSession == session and queuedOpen then
+            closeConversation()
+            print('[fivemai] Interface vocale non chargée. Reconnectez-vous après la mise à jour de la ressource.')
+        end
+    end)
 end
+RegisterNUICallback('ready', function(_, cb)
+    nuiReady = true
+    deliverOpen()
+    cb({ok=true})
+end)
+RegisterNUICallback('opened', function(data, cb)
+    if data.sessionId == uiSession and currentNpc then
+        queuedOpen = nil
+        SendNUIMessage({type='ptt', held=pressed})
+    end
+    cb({ok=true})
+end)
 local function requestProfile(nearest)
     if candidate ~= nearest then return end
     nearest.attempt = (nearest.attempt or 0) + 1
@@ -61,7 +99,11 @@ end
 RegisterCommand('+fivemai_talk', function()
     if pressed then return end
     local nearest = nearestNpc()
-    if not nearest then return end
+    if not nearest then
+        print('[fivemai] Touche détectée : approchez-vous à moins de ' .. tostring(config.interactionDistance) .. ' mètres d’un PNJ vivant.')
+        SendNUIMessage({type='notice', message='Approchez-vous d’un PNJ vivant pour lui parler.'})
+        return
+    end
     if currentNpc and currentPed ~= nearest.ped then closeConversation() end
     pressed = true
     if not talking then
@@ -88,7 +130,7 @@ RegisterCommand('+fivemai_talk', function()
             requestProfile(nearest)
         end)
     else
-        SendNUIMessage({type='ptt', held=true})
+        if queuedOpen then deliverOpen() else SendNUIMessage({type='ptt', held=true}) end
     end
 end, false)
 RegisterCommand('-fivemai_talk', function()
@@ -133,8 +175,7 @@ RegisterNUICallback('offer', function(data, cb)
     cb({ok=true})
 end)
 RegisterNUICallback('close', function(_, cb)
-    talking, pressed, currentNpc, currentPed, candidate = false, false, nil, nil, nil
-    TriggerServerEvent('fivemai:stop')
+    closeConversation()
     cb({ok=true})
 end)
 RegisterNetEvent('fivemai:answer', function(sdp) SendNUIMessage({type='answer', sdp=sdp}) end)
@@ -143,10 +184,7 @@ RegisterNetEvent('fivemai:error', function(message)
     print('[fivemai] ' .. text)
     SendNUIMessage({type='error', message=text})
 end)
-RegisterNetEvent('fivemai:closed', function()
-    talking, pressed, currentNpc, currentPed, candidate = false, false, nil, nil, nil
-    SendNUIMessage({type='closed'})
-end)
+RegisterNetEvent('fivemai:closed', function() closeConversation(false) end)
 RegisterNUICallback('diagnostic', function(data, cb)
     print('[fivemai] ' .. tostring(data.message))
     cb({ok=true})
@@ -220,3 +258,5 @@ RegisterNetEvent('fivemai:jobApply', function(data)
         TriggerServerEvent('fivemai:jobResult', data.token, ok)
     end)
 end)
+
+print('[fivemai] Commande de parole chargée : N par défaut, personnalisable dans les paramètres FiveM.')

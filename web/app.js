@@ -145,7 +145,8 @@ async function connect(npc,microphone){
   }catch(e){if(run===generation)fail(e.name==='NotAllowedError'?'Accès microphone refusé par FiveM/Windows. Consultez F8.':e.message);}
 }
 window.addEventListener('message',async({data})=>{
-  if(data.type==='open')void connect(data.npc,data.microphone);
+  if(data.type==='open'){void post('opened',{sessionId:data.sessionId}).catch(()=>{});void connect(data.npc,data.microphone);}
+  if(data.type==='notice'){status(data.message);clearTimeout(hideTimer);hideTimer=setTimeout(()=>{$('hud').hidden=true;},4000);}
   if(data.type==='proximity')$('voice').volume=PushToTalk.proximityVolume(data.distance,data.fullDistance,data.maxDistance);
   if(data.type==='microphones')void microphones(data.index);
   if(data.type==='ptt'){
@@ -158,5 +159,9 @@ window.addEventListener('message',async({data})=>{
   if(data.type==='error')fail(data.message);
   if(data.type==='closed'){cleanup();hideTimer=setTimeout(()=>{$('hud').hidden=true;},8000);}
 });
+// Announce readiness after the message handler exists so early key presses
+// cannot leave Lua waiting on a UI that silently dropped its open message.
+function announceReady(){void post('ready').catch(()=>setTimeout(announceReady,500));}
+announceReady();
 
 }

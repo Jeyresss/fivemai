@@ -43,3 +43,9 @@ test('walking out of hearing range mutes playback without closing the audio stre
  await s.event({type:'proximity',distance:30,fullDistance:3,maxDistance:18});assert.equal(s.elements.get('voice').volume,0);assert.equal(s.track.stopped,false);
  await s.event({type:'proximity',distance:2,fullDistance:3,maxDistance:18});assert.equal(s.elements.get('voice').volume,1);assert.equal(s.requests.some(r=>r[0]==='https://fivemai/close'),false);
 });
+
+test('NUI announces readiness and acknowledges the Lua open session',async()=>{
+ const s=browser();assert.equal(s.requests[0][0],'https://fivemai/ready');
+ await s.event({type:'open',sessionId:17,npc:{id:'marcel_dubois',name:'Marcel'}});await tick();
+ assert.equal(s.requests.find(r=>r[0]==='https://fivemai/opened')[1].sessionId,17);
+});

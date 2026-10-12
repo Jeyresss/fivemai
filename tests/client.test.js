@@ -37,7 +37,11 @@ function SetBlockingOfNonTemporaryEvents()end
 function SetModelAsNoLongerNeeded()end
 function PlayerPedId()return 99 end
 function GetGamePool()return {target}end
-function GetEntityCoords(ped)return ped==99 and vector3(0,0,0) or vector3(2,0,0)end
+function GetEntityCoords(ped)
+ if ped==99 then return vector3(0,0,0)end
+ if ped==10 and target~=10 then return vector3(100,0,0)end
+ return vector3(2,0,0)
+end
 function DoesEntityExist()return true end
 function IsPedAPlayer(ped)return ped==99 end
 function IsPedHuman()return true end
@@ -46,9 +50,9 @@ function NetworkGetEntityIsNetworked()return true end
 function NetworkRegisterEntityAsNetworked()end
 function NetworkGetNetworkIdFromEntity()return 101 end
 `;
-function run(assertions){
+function run(assertions,{ready=true}={}){
  const L=lauxlib.luaL_newstate();lualib.luaL_openlibs(L);
- const source=fixture+'\n'+fs.readFileSync(path.join(__dirname,'../client/main.lua'),'utf8')+'\nthreads[1]()\n'+assertions;
+ const source=fixture+'\n'+fs.readFileSync(path.join(__dirname,'../client/main.lua'),'utf8')+'\nthreads[1]()\n'+(ready?'callbacks.ready({},function()end)\n':'')+assertions;
  try{const code=lauxlib.luaL_dostring(L,to_luastring(source));assert.equal(code,lua.LUA_OK,code===lua.LUA_OK?undefined:to_jsstring(lua.lua_tostring(L,-1)));}finally{lua.lua_close(L);}
 }
 test('fixed NPC voice opens immediately without a resolver request',()=>run(`
@@ -85,4 +89,44 @@ assert(#network==3,'Exactly three profile attempts expected')
 events['fivemai:resolved']({requestId=req,ok=false,retryable=true,error='PNJ pas encore synchronisé'})
 assert(sent[#sent].type=='closed')
 assert(string.find(logs[#logs],'Profil indisponible'))
+`));
+
+test('holding the key before NUI readiness queues the open instead of losing it',()=>run(`
+commands['+fivemai_talk']()
+assert(#sent==0,'Do not send an open to an unloaded NUI')
+callbacks.ready({},function()end)
+assert(sent[1].type=='open')
+assert(sent[2].type=='ptt' and sent[2].held==true)
+`,{ready:false}));
+test('release before NUI readiness does not accidentally reactivate the microphone',()=>run(`
+commands['+fivemai_talk']()
+commands['-fivemai_talk']()
+callbacks.ready({},function()end)
+assert(sent[2].type=='open')
+assert(sent[3].type=='ptt' and sent[3].held==false)
+`,{ready:false}));
+test('acknowledged UI opens once and subsequent key presses only toggle speech',()=>run(`
+commands['+fivemai_talk']()
+local session=sent[1].sessionId
+callbacks.opened({sessionId=session},function()end)
+commands['-fivemai_talk']()
+commands['+fivemai_talk']()
+local opens=0
+for _,message in ipairs(sent)do if message.type=='open' then opens=opens+1 end end
+assert(opens==1,'Do not restart the working microphone on every press')
+assert(sent[#sent].type=='ptt' and sent[#sent].held==true)
+`));
+test('configured NPC remains selectable when ambient population scanning fails',()=>run(`
+GetGamePool=function()error('Population unavailable')end
+commands['+fivemai_talk']()
+assert(sent[1].type=='open' and sent[1].npc.id=='marcel_dubois')
+`));
+test('press outside range reports why and a later press near the NPC still opens',()=>run(`
+local originalCoords=GetEntityCoords
+GetEntityCoords=function(ped)return ped==99 and vector3(1000,0,0) or originalCoords(ped)end
+commands['+fivemai_talk']()
+assert(sent[1].type=='notice')
+GetEntityCoords=originalCoords
+commands['+fivemai_talk']()
+assert(sent[2].type=='open')
 `));
