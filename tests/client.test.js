@@ -53,7 +53,7 @@ function NetworkGetNetworkIdFromEntity()return 101 end
 `;
 function run(assertions,{ready=true}={}){
  const L=lauxlib.luaL_newstate();lualib.luaL_openlibs(L);
- const source=fixture+'\n'+fs.readFileSync(path.join(__dirname,'../client/behavior.lua'),'utf8')+'\n'+fs.readFileSync(path.join(__dirname,'../client/main.lua'),'utf8')+'\nthreads[1]()\n'+(ready?'callbacks.ready({},function()end)\n':'')+assertions;
+ const source=fixture+'\n'+fs.readFileSync(path.join(__dirname,'../client/main.lua'),'utf8')+'\nthreads[1]()\n'+(ready?'callbacks.ready({},function()end)\n':'')+assertions;
  try{const code=lauxlib.luaL_dostring(L,to_luastring(source));assert.equal(code,lua.LUA_OK,code===lua.LUA_OK?undefined:to_jsstring(lua.lua_tostring(L,-1)));}finally{lua.lua_close(L);}
 }
 test('fixed NPC voice opens immediately without a resolver request',()=>run(`
@@ -318,4 +318,20 @@ threads[3]()
 IsPedFleeing=function()return true end
 ClearPedTasks=function()error('Do not clear a flee task')end
 events['fivemai:jobEnd']({token='job-a'})
+`));
+
+test('conversation opens at 3.45 meters with the updated four-meter interaction range',()=>run(`
+configForTest.interactionDistance=4
+GetEntityCoords=function(ped)return ped==99 and vector3(0,0,0) or vector3(3.45,0,0)end
+commands['+fivemai_talk']()
+assert(sent[1].type=='open' and sent[1].npc.id=='marcel_dubois')
+callbacks.close({},function()end)
+assert(sent[#sent].type=='closed')
+`));
+test('entry script does not depend on a global behavior object for open and close',()=>run(`
+assert(_G.FivemAIBehavior==nil,'Behavior helpers must stay local to the entry script')
+commands['+fivemai_talk']()
+callbacks.close({},function()end)
+commands['+fivemai_talk']()
+assert(sent[#sent].type=='ptt' and sent[#sent].held==true)
 `));

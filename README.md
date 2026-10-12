@@ -33,7 +33,7 @@ Pour mettre à jour, dans le dossier de la ressource : `git pull --ff-only origi
 
 Approcher un PNJ humain vivant, maintenir **N** et parler après « Connecté ». Relâcher pour demander sa réponse. Une nouvelle pression peut interrompre le PNJ. Aucun menu ni curseur; seul un indicateur vocal est affiché. La touche se change dans **Paramètres → Assignation des touches → FiveM → Maintenir pour parler au PNJ (IA)**.
 
-La distance d’interaction est de 3 mètres. La voix est à plein volume jusqu’à `voiceFullDistance` (3 m), baisse progressivement jusqu’à `voiceMaxDistance` (18 m), puis devient inaudible. **S’éloigner ne ferme plus la connexion ni la lecture**. Si le PNJ parle encore quand vous revenez, vous entendez la suite de sa phrase, sans rejouer l’audio manqué. Le microphone est coupé lorsque vous ne maintenez pas la touche et lorsque vous quittez la portée d’interaction.
+La distance d’interaction est de 4 mètres. La voix est à plein volume jusqu’à `voiceFullDistance` (3 m), baisse progressivement jusqu’à `voiceMaxDistance` (18 m), puis devient inaudible. **S’éloigner ne ferme plus la connexion ni la lecture**. Si le PNJ parle encore quand vous revenez, vous entendez la suite de sa phrase, sans rejouer l’audio manqué. Le microphone est coupé lorsque vous ne maintenez pas la touche et lorsque vous quittez la portée d’interaction.
 
 La conversation reste individuelle : l’atténuation est calculée pour l’interlocuteur; les autres joueurs ne reçoivent pas encore la voix du PNJ. La session se termine à sa durée maximale (180 s), à la déconnexion, au changement de bucket, à la disparition réelle du PNJ réseau ou à un changement de personnage. Ces limites restent différentes de la portée d’écoute.
 
@@ -148,3 +148,5 @@ Les erreurs de microphone sans message affichent désormais leur type. Si l’id
 Après mise à jour, F8 doit afficher `Version npc-capture-2`. La console txAdmin affiche aussi le chemin de la ressource chargée : vérifier que c’est le checkout où `git pull` a été exécuté si plusieurs dossiers `fivemai` existent.
 
 L’arrivée devant le capot est vérifiée au sol, avec une tolérance de hauteur pour la position du corps du PNJ. F8 affiche les étapes « arrivé devant le capot », « capot ouvert », « animation lancée » et « intervention appliquée », ou la cause du refus. Une erreur native pendant la préparation est transmise au serveur au lieu de laisser la tâche bloquée.
+
+Les fonctions de comportement sont intégrées localement à `client/main.lua`; aucun chargement préalable de module global n’est nécessaire. La portée de début de conversation par défaut est de 4 m (`interactionDistance`), distincte de la portée d’écoute de 18 m.

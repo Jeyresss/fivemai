@@ -1,7 +1,7 @@
 {
   "model": "gpt-realtime",
   "maxSessionSeconds": 180,
-  "interactionDistance": 3,
+  "interactionDistance": 4,
   "npcs": [
     {
       "id": "marcel_dubois",
