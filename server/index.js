@@ -4,7 +4,7 @@ const root=GetResourcePath(GetCurrentResourceName());
 // FiveM evaluates scripts with a synthetic module at the resource root.
 const resourceRequire=require('node:module').createRequire(path.join(root,'package.json'));
 const WebSocket=resourceRequire('ws');
-const {MemoryStore,sessionConfig,distance}=resourceRequire('./server/core.js');
+const {MemoryStore,sessionConfig,distance,openAIError}=resourceRequire('./server/core.js');
 const config=JSON.parse(fs.readFileSync(path.join(root,'config.json'),'utf8'));
 const memory=new MemoryStore(path.join(root,'data','memory.json'));
 const active=new Map(), cooldown=new Map();
@@ -37,10 +37,11 @@ onNet('fivemai:offer',async (npcId,sdp)=>{
   s.timer=setTimeout(()=>void stop(src),config.maxSessionSeconds*1000);
   try {
     const body=new FormData();
-    body.set('sdp',new Blob([sdp],{type:'application/sdp'}),'offer.sdp');
-    body.set('session',new Blob([JSON.stringify(sessionConfig(config,npc,memory.get(player,npc.id)))],{type:'application/json'}),'session.json');
+    // The API expects form fields, not uploaded files with filenames.
+    body.set('sdp',sdp);
+    body.set('session',JSON.stringify(sessionConfig(config,npc,memory.get(player,npc.id))));
     const result=await fetch('https://api.openai.com/v1/realtime/calls',{method:'POST',headers:{Authorization:`Bearer ${key()}`},body,signal:AbortSignal.timeout(20000)});
-    if (!result.ok) throw new Error(`OpenAI HTTP ${result.status}`);
+    if (!result.ok) throw await openAIError(result,key());
     const answer=await result.text();
     const location=result.headers.get('location')||'';
     s.callId=location.split('/').pop();

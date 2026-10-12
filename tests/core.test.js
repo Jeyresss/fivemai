@@ -15,3 +15,9 @@ test('Realtime session uses native audio, NPC identity and memory without transc
  const s=sessionConfig(config,config.npcs[0],[{text:'Le joueur a réparé une voiture.'}]);assert.deepEqual(s.output_modalities,['audio']);assert.equal(s.audio.input.transcription,undefined);assert.match(s.instructions,/Marcel Dubois/);assert.match(s.instructions,/réparé une voiture/);assert.equal(s.tools[0].name,'remember_memory');assert.equal(s.audio.input.turn_detection.interrupt_response,true);
 });
 test('distance checks reject distant interactions',()=>{assert.equal(distance({x:0,y:0,z:0},{x:3,y:4,z:0}),5);});
+
+test('non-JSON API failures do not log raw response bodies',async()=>{
+ const {openAIError}=require('../server/core');
+ const error=await openAIError({status:502,json:async()=>{throw new Error('private upstream body');}});
+ assert.match(error.message,/HTTP 502/);assert.doesNotMatch(error.message,/private upstream body/);
+});

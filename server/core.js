@@ -25,4 +25,14 @@ function sessionConfig(config,npc,memories) {
     audio:{input:{turn_detection:{type:'semantic_vad',eagerness:'medium',create_response:true,interrupt_response:true}},output:{voice:npc.voice}},
     tools:[{type:'function',name:'remember_memory',description:'Conserver un fait durable dit pendant cette conversation. Indiquer explicitement si le joueur le déclare; aucune observation du jeu ne peut être inventée.',parameters:{type:'object',properties:{memory:{type:'string',maxLength:1200}},required:['memory'],additionalProperties:false}}],tool_choice:'auto'};
 }
-module.exports={MemoryStore,sessionConfig,distance};
+async function openAIError(response,secret='') {
+  let error;
+  try { error=(await response.json())?.error; } catch { /* Never log raw response bodies. */ }
+  const details=[error?.code,error?.param,error?.message]
+    .filter(value=>typeof value==='string').join(' | ');
+  let safe=details;
+  if(secret) safe=safe.split(secret).join('[REDACTED]');
+  safe=safe.replace(/sk-[A-Za-z0-9_-]+/g,'[REDACTED]').replace(/[\r\n\x00-\x1f]/g,' ').slice(0,700);
+  return new Error(`OpenAI HTTP ${response.status}${safe ? ': '+safe : ' (aucun détail JSON exploitable)'}`);
+}
+module.exports={MemoryStore,sessionConfig,distance,openAIError};
