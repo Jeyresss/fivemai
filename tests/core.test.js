@@ -28,3 +28,9 @@ test('model matching uses a portable GTA JOAAT hash',()=>{
 test('blank server errors receive a nonempty diagnostic',()=>{
  const {errorMessage}=require('../server/core');assert.equal(errorMessage('Native failure'),'Native failure');assert.match(errorMessage(new Error('')),/sans message/);
 });
+
+test('Realtime voice instructions reflect the observed physical behavior',()=>{
+ const fear=sessionConfig(config,config.npcs[0],[],[],'afraid');assert.match(fear.instructions,/tremblante, essoufflée/);assert.match(fear.instructions,/continues de courir/);
+ const anger=sessionConfig(config,config.npcs[0],[],[],'angry');assert.match(anger.instructions,/te bats contre cet interlocuteur/);assert.match(anger.instructions,/agressives/);
+ const other=sessionConfig(config,config.npcs[0],[],[],'combat');assert.match(other.instructions,/sans confirmation/);
+});

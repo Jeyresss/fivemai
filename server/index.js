@@ -4,7 +4,7 @@ const root=GetResourcePath(GetCurrentResourceName());
 // FiveM evaluates scripts with a synthetic module at the resource root.
 const resourceRequire=require('node:module').createRequire(path.join(root,'package.json'));
 const WebSocket=resourceRequire('ws');
-const {MemoryStore,sessionConfig,distance,openAIError,modelHash,errorMessage}=resourceRequire('./server/core.js');
+const {MemoryStore,sessionConfig,distance,openAIError,modelHash,errorMessage,behaviorInstructions,validBehavior}=resourceRequire('./server/core.js');
 const {JobRegistry,MechanicJob,ToolTurnCoordinator,selectVehicle}=resourceRequire('./server/jobs.js');
 const {ProfileStore}=resourceRequire('./server/profiles.js');
 const config=JSON.parse(fs.readFileSync(path.join(root,'config.json'),'utf8'));
@@ -15,6 +15,7 @@ const key=()=>GetConvar('fivemai_openai_key','');
 function identity(src) { return getPlayerIdentifiers(String(src)).find(x=>x.startsWith('license:')); }
 const jobs=new JobRegistry(),pendingJobs=new Map();
 function inspectVehicle(ctx,selection={}){
+  if(ctx.session.behavior&&ctx.session.behavior!=='calm')throw new Error('Ce PNJ fuit ou se bat et ne peut pas effectuer un service');
   if(active.get(ctx.src)!==ctx.session||!nearby(ctx.src,ctx.session.npc,15))throw new Error('Restez près du mécanicien');
   const npcPos=position(ctx.session.npc),playerPed=GetPlayerPed(String(ctx.src));
   const [px,py,pz]=GetEntityCoords(playerPed),bucket=GetPlayerRoutingBucket(String(ctx.src));
@@ -48,7 +49,7 @@ onNet('fivemai:jobArrived',(token,success,reason)=>{
  const src=Number(global.source),pending=pendingJobs.get(token);
  if(!pending||pending.ctx.src!==src||pending.stage!=='walking')return;
  if(success!==true){
-  const reasons={script:'Erreur de préparation sur le client; consulter F8',control:'Impossible de prendre le contrôle du PNJ ou du véhicule',hood:'Le capot ne peut pas être ouvert sur ce véhicule',moved:'Le véhicule a bougé',path:'Le mécanicien ne peut pas rejoindre le capot'};
+  const reasons={danger:'Le mécanicien a peur ou se bat; intervention annulée',script:'Erreur de préparation sur le client; consulter F8',control:'Impossible de prendre le contrôle du PNJ ou du véhicule',hood:'Le capot ne peut pas être ouvert sur ce véhicule',moved:'Le véhicule a bougé',path:'Le mécanicien ne peut pas rejoindre le capot'};
   return finishJob(token,{ok:false,error:reasons[reason]||'Le mécanicien ne peut pas rejoindre le capot ou le véhicule a bougé'});
  }
  try{
@@ -165,7 +166,35 @@ async function stop(src) {
     catch { console.warn('[fivemai] Impossible de confirmer la fermeture OpenAI.'); }
   }
 }
-onNet('fivemai:offer',async (npcId,sdp)=>{
+function sessionInstructions(s){return sessionConfig(config,s.npc,[...memory.get('world',s.npc.id).slice(-10),...memory.get(s.player,s.npc.id).slice(-20)],jobs.tools(s.npc.jobId),s.behavior).instructions;}
+function maybeEmotionalReply(src,s){
+ if(active.get(src)!==s||!s.emotionReplyPending||s.awaitingBehaviorUpdate||s.responseActive||s.playerSpeaking||s.toolTurn?.pending||s.toolTurn?.outputs||s.ws?.readyState!==WebSocket.OPEN)return;
+ s.emotionReplyPending=false;s.responseActive=true;s.ws.send(JSON.stringify({type:'response.create'}));
+}
+function pushBehavior(s){
+ if(s.ws?.readyState!==WebSocket.OPEN)return;
+ s.awaitingBehaviorUpdate=true;
+ s.ws.send(JSON.stringify({type:'session.update',session:{type:'realtime',instructions:sessionInstructions(s)}}));
+}
+onNet('fivemai:speaking',speaking=>{
+ const s=active.get(Number(global.source));if(!s)return;
+ s.playerSpeaking=speaking===true;if(s.playerSpeaking)s.emotionReplyPending=false;
+});
+onNet('fivemai:behavior',(npcId,state,speaking)=>{
+ const src=Number(global.source),s=active.get(src);
+ if(!s||s.npc.id!==npcId||!validBehavior(state)||!nearby(src,s.npc,50)||s.behavior===state)return;
+ s.behavior=state;s.playerSpeaking=speaking===true;
+ if(state!=='calm')for(const [token,pending]of pendingJobs)if(pending.ctx.src===src)finishJob(token,{ok:false,error:'Le PNJ a peur ou se bat; intervention annulée'});
+ if(state==='calm')s.emotionReplyPending=false;
+ if(s.ws?.readyState!==WebSocket.OPEN)return;
+ pushBehavior(s);
+ if(state!=='calm'&&!s.playerSpeaking&&(s.responseActive||s.outputPlaying)){
+  s.emotionReplyPending=true;
+  if(s.responseActive)s.ws.send(JSON.stringify({type:'response.cancel'}));
+  if(s.outputPlaying)s.ws.send(JSON.stringify({type:'output_audio_buffer.clear'}));
+ }
+});
+onNet('fivemai:offer',async (npcId,sdp,behavior='calm',speaking=false)=>{
   const src=Number(global.source);
   const npc=lookup(npcId);
   if (!npc || typeof sdp!=='string' || sdp.length>40000 || !sdp.startsWith('v=0') || !nearby(src,npc)) return emitNet('fivemai:error',src,'PNJ inaccessible ou requête invalide.');
@@ -174,13 +203,14 @@ onNet('fivemai:offer',async (npcId,sdp)=>{
   const player=identity(src);
   if (!player || !key()) return emitNet('fivemai:error',src,'Identifiant joueur ou clé OpenAI serveur manquante.');
   cooldown.set(src,Date.now());
-  const s={npc,player,callId:null,ws:null,timer:null,remembered:new Set()}; active.set(src,s);npcLocks.set(npc.id,src);
+  const initialBehavior=validBehavior(behavior)?behavior:'calm';
+  const s={npc,player,behavior:initialBehavior,playerSpeaking:speaking===true,responseActive:false,outputPlaying:false,emotionReplyPending:false,awaitingBehaviorUpdate:false,callId:null,ws:null,timer:null,remembered:new Set()}; active.set(src,s);npcLocks.set(npc.id,src);
   s.timer=setTimeout(()=>void stop(src),config.maxSessionSeconds*1000);
   try {
     const body=new FormData();
     // The API expects form fields, not uploaded files with filenames.
     body.set('sdp',sdp);
-    body.set('session',JSON.stringify(sessionConfig(config,npc,[...memory.get('world',npc.id).slice(-10),...memory.get(player,npc.id).slice(-20)],jobs.tools(npc.jobId))));
+    body.set('session',JSON.stringify(sessionConfig(config,npc,[...memory.get('world',npc.id).slice(-10),...memory.get(player,npc.id).slice(-20)],jobs.tools(npc.jobId),s.behavior)));
     const result=await fetch('https://api.openai.com/v1/realtime/calls',{method:'POST',headers:{Authorization:`Bearer ${key()}`},body,signal:AbortSignal.timeout(20000)});
     if (!result.ok) throw await openAIError(result,key());
     const answer=await result.text();
@@ -197,13 +227,17 @@ onNet('fivemai:offer',async (npcId,sdp)=>{
     s.ws.on('error',()=>{emitNet('fivemai:error',src,'Connexion mémoire interrompue.');void stop(src);});
     s.ws.on('close',()=>{if(active.get(src)===s) void stop(src);});
     if (active.get(src)!==s) { s.ws.close(); return; }
-    const toolTurn=new ToolTurnCoordinator(()=>{if(active.get(src)===s&&s.ws.readyState===WebSocket.OPEN)s.ws.send(JSON.stringify({type:'response.create'}));});
+    const toolTurn=new ToolTurnCoordinator(()=>{if(active.get(src)===s&&s.ws.readyState===WebSocket.OPEN){s.emotionReplyPending=false;s.responseActive=true;s.ws.send(JSON.stringify({type:'response.create'}));}});
+    s.toolTurn=toolTurn;
     s.ws.on('message',async raw=>{
       let event;
       try{
         event=JSON.parse(raw);
-        if(event.type==='response.created'){toolTurn.created();return;}
-        if(event.type==='response.done'){toolTurn.done();return;}
+        if(event.type==='response.created'){s.responseActive=true;toolTurn.created();return;}
+        if(event.type==='session.updated'){s.awaitingBehaviorUpdate=false;maybeEmotionalReply(src,s);return;}
+        if(event.type==='output_audio_buffer.started'){s.outputPlaying=true;return;}
+        if(event.type==='output_audio_buffer.stopped'||event.type==='output_audio_buffer.cleared'){s.outputPlaying=false;return;}
+        if(event.type==='response.done'){s.responseActive=false;toolTurn.done();maybeEmotionalReply(src,s);return;}
         if(event.type!=='response.function_call_arguments.done'||s.remembered.has(event.call_id))return;
         s.remembered.add(event.call_id);toolTurn.begin();
         let output;
@@ -221,6 +255,7 @@ onNet('fivemai:offer',async (npcId,sdp)=>{
         toolTurn.complete();
       }catch{console.warn('[fivemai] Événement outil illisible.');}
     });
+    if(s.behavior!==initialBehavior)pushBehavior(s);
     emitNet('fivemai:answer',src,answer);
   } catch(e) {
     console.warn(`[fivemai] ${e.message}`);

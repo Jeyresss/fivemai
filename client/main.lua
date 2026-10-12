@@ -1,6 +1,8 @@
 local config = json.decode(LoadResourceFile(GetCurrentResourceName(), 'config.json'))
 local peds = {}
 local talking = false
+local workingJob = nil
+local currentMood, moodChangedAt = 'calm', 0
 CreateThread(function()
     for _, npc in ipairs(config.npcs) do
         local model = joaat(npc.model)
@@ -11,8 +13,9 @@ CreateThread(function()
             local c = npc.coords
             local ped = CreatePed(4, model, c.x, c.y, c.z - 1.0, c.heading, false, false)
             SetEntityInvincible(ped, true)
-            FreezeEntityPosition(ped, true)
-            SetBlockingOfNonTemporaryEvents(ped, true)
+            FreezeEntityPosition(ped, false)
+            SetBlockingOfNonTemporaryEvents(ped, false)
+            if type(TaskStandStill) == 'function' then TaskStandStill(ped, -1) end
             peds[npc.id] = ped
             SetModelAsNoLongerNeeded(model)
         end
@@ -80,6 +83,7 @@ local function printSearch()
 end
 RegisterCommand('pnjdiag', function() nearestNpc() printSearch() end, false)
 local function closeConversation(notifyServer)
+    if currentPed then FivemAIBehavior.release(currentPed, not workingJob, currentNpc and peds[currentNpc.id] == currentPed) end
     uiSession = uiSession + 1
     queuedOpen = nil
     talking, pressed, currentNpc, currentPed, candidate = false, false, nil, nil, nil
@@ -93,6 +97,8 @@ local function deliverOpen()
 end
 local function openConversation(profile, ped)
     currentNpc, currentPed, candidate = profile, ped, nil
+    currentMood = FivemAIBehavior.pose(ped, PlayerPedId(), true, peds[profile.id] == ped, workingJob ~= nil)
+    moodChangedAt = GetGameTimer()
     uiSession = uiSession + 1
     local session = uiSession
     queuedOpen = {type='open', sessionId=session, microphone=GetResourceKvpString('fivemai_microphone'), npc={id=profile.id, name=profile.firstName .. ' ' .. profile.lastName}}
@@ -163,11 +169,13 @@ RegisterCommand('+fivemai_talk', function()
             requestProfile(nearest)
         end)
     else
+        TriggerServerEvent('fivemai:speaking', true)
         if queuedOpen then deliverOpen() else SendNUIMessage({type='ptt', held=true}) end
     end
 end, false)
 RegisterCommand('-fivemai_talk', function()
     pressed = false
+    if currentNpc then TriggerServerEvent('fivemai:speaking', false) end
     SendNUIMessage({type='ptt', held=false})
 end, false)
 RegisterNetEvent('fivemai:resolved', function(result)
@@ -195,16 +203,28 @@ CreateThread(function()
             if currentNpc.netId and NetworkDoesEntityExistWithNetworkId(currentNpc.netId) then ped = NetToPed(currentNpc.netId) currentPed = ped end
             local coords = ped and DoesEntityExist(ped) and GetEntityCoords(ped) or vector3(currentNpc.coords.x, currentNpc.coords.y, currentNpc.coords.z)
             local distance = entityDistance(GetEntityCoords(PlayerPedId()), coords)
+            if ped and DoesEntityExist(ped) then
+                local observed = FivemAIBehavior.observe(ped, PlayerPedId())
+                if observed ~= 'calm' then moodChangedAt = GetGameTimer() end
+                local recovered = currentMood == 'calm' or GetGameTimer() - moodChangedAt >= 1800
+                local mood = FivemAIBehavior.pose(ped, PlayerPedId(), distance <= config.interactionDistance + 1 and recovered, peds[currentNpc.id] == ped, workingJob ~= nil)
+                if mood ~= currentMood and (mood ~= 'calm' or GetGameTimer() - moodChangedAt >= 1800) then
+                    currentMood = mood
+                    TriggerServerEvent('fivemai:behavior', currentNpc.id, mood, pressed)
+                end
+            end
             SendNUIMessage({type='proximity', distance=distance, fullDistance=config.voiceFullDistance or 3, maxDistance=config.voiceMaxDistance or 18})
             if pressed and distance > config.interactionDistance + 1 then
                 pressed = false
+                TriggerServerEvent('fivemai:speaking', false)
                 SendNUIMessage({type='ptt', held=false})
             end
         end
     end
 end)
 RegisterNUICallback('offer', function(data, cb)
-    TriggerServerEvent('fivemai:offer', data.npcId, data.sdp)
+    local mood = currentPed and DoesEntityExist(currentPed) and FivemAIBehavior.observe(currentPed, PlayerPedId()) or 'calm'
+    TriggerServerEvent('fivemai:offer', data.npcId, data.sdp, mood, pressed)
     cb({ok=true})
 end)
 RegisterNUICallback('close', function(_, cb)
@@ -225,6 +245,7 @@ RegisterNUICallback('diagnostic', function(data, cb)
 end)
 AddEventHandler('onResourceStop', function(name)
     if name ~= GetCurrentResourceName() then return end
+    if currentPed then FivemAIBehavior.release(currentPed, true, peds[currentNpc and currentNpc.id] == currentPed) end
     for _, ped in pairs(peds) do DeleteEntity(ped) end
 end)
 
@@ -251,7 +272,6 @@ RegisterNUICallback('microphone', function(data, cb)
     cb({ok=true})
 end)
 
-local workingJob = nil
 local movementSerial = 0
 local function takeControl(entity, deadline)
     if not NetworkGetEntityIsNetworked(entity) then return true end
@@ -277,6 +297,11 @@ RegisterNetEvent('fivemai:jobStart', function(data)
         TriggerServerEvent('fivemai:jobArrived', data.token, false)
         return
     end
+    if FivemAIBehavior.observe(ped, PlayerPedId()) ~= 'calm' then
+        TriggerServerEvent('fivemai:jobArrived', data.token, false, 'danger')
+        return
+    end
+    FivemAIBehavior.release(ped, false, false)
     movementSerial = movementSerial + 1
     local job = {token=data.token, ped=ped, vehicle=vehicle, origin=GetEntityCoords(ped), heading=GetEntityHeading(ped), fixed=peds[data.npcId]==ped, serial=movementSerial}
     workingJob = job
@@ -300,6 +325,7 @@ RegisterNetEvent('fivemai:jobStart', function(data)
         TaskFollowNavMeshToCoord(ped, target.x, target.y, target.z, 1.0, 15000, 0.65, 0, heading)
         local failureReason = 'path'
         while workingJob == job and DoesEntityExist(ped) and DoesEntityExist(vehicle) and GetGameTimer() < deadline do
+            if FivemAIBehavior.observe(ped, PlayerPedId()) ~= 'calm' then failureReason = 'danger' break end
             if entityDistance(GetEntityCoords(vehicle), startVehicle) > 0.5 or GetEntitySpeed(vehicle) > 0.3 then failureReason = 'moved' break end
             if atWorkPosition(ped, target, 1.3) then
                 mechanicLog('arrivé devant le capot')
@@ -309,7 +335,7 @@ RegisterNetEvent('fivemai:jobStart', function(data)
                 RequestAnimDict('mini@repair')
                 local animationDeadline = GetGameTimer() + 1500
                 while not HasAnimDictLoaded('mini@repair') and GetGameTimer() < animationDeadline do Wait(50) end
-                if workingJob == job and HasAnimDictLoaded('mini@repair') then
+                if workingJob == job and HasAnimDictLoaded('mini@repair') and FivemAIBehavior.observe(ped, PlayerPedId()) == 'calm' then
                     job.target, job.vehicleOrigin = target, startVehicle
                     if GetIsDoorValid(vehicle, 4) then
                         job.hoodWasOpen = GetVehicleDoorAngleRatio(vehicle, 4) > 0.05
@@ -354,6 +380,7 @@ RegisterNetEvent('fivemai:jobEnd', function(data)
         if job.hoodWasOpen then SetVehicleDoorOpen(job.vehicle, 4, false, false) else SetVehicleDoorShut(job.vehicle, 4, false) end
     end
     if not DoesEntityExist(job.ped) then return end
+    if FivemAIBehavior.observe(job.ped, PlayerPedId()) ~= 'calm' then return end
     ClearPedTasks(job.ped)
     -- Demo peds return to their anchor so their configured server position remains valid.
     if job.fixed then
@@ -361,8 +388,9 @@ RegisterNetEvent('fivemai:jobEnd', function(data)
             TaskFollowNavMeshToCoord(job.ped, job.origin.x, job.origin.y, job.origin.z, 1.0, 15000, 0.65, 0, job.heading)
             local deadline = GetGameTimer() + 15000
             while movementSerial == job.serial and DoesEntityExist(job.ped) and GetGameTimer() < deadline do
+                if FivemAIBehavior.observe(job.ped, PlayerPedId()) ~= 'calm' then return end
                 if atWorkPosition(job.ped, job.origin, 1.3) then
-                    FreezeEntityPosition(job.ped, true)
+                    if type(TaskStandStill) == 'function' then TaskStandStill(job.ped, -1) end
                     return
                 end
                 Wait(100)
@@ -381,7 +409,7 @@ RegisterNetEvent('fivemai:jobApply', function(data)
             ok = workingJob == job and currentNpc and currentNpc.id == data.npcId and NetworkHasControlOfEntity(vehicle) and job.vehicle == vehicle and entityDistance(GetEntityCoords(PlayerPedId()), GetEntityCoords(vehicle)) <= 12
         end
         if ok then
-            ok = DoesEntityExist(job.ped) and atWorkPosition(job.ped, job.target, 1.6) and entityDistance(GetEntityCoords(vehicle), job.vehicleOrigin) <= 0.5 and GetEntitySpeed(vehicle) <= 0.3
+            ok = DoesEntityExist(job.ped) and FivemAIBehavior.observe(job.ped, PlayerPedId()) == 'calm' and atWorkPosition(job.ped, job.target, 1.6) and entityDistance(GetEntityCoords(vehicle), job.vehicleOrigin) <= 0.5 and GetEntitySpeed(vehicle) <= 0.3
         end
         if ok and data.service == 'repair' then
             SetVehicleFixed(vehicle)

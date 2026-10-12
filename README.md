@@ -73,6 +73,16 @@ exports['fivemai']:RecordNPCEvent('marcel_dubois', 'Une voiture rouge a été vo
 
 Ne jamais relayer directement une description arbitraire du client vers ces exports. Qualifier une information entendue de rumeur, sans la transformer en observation certaine. Les émotions sont guidées par la personnalité et les souvenirs; leur cohérence parfaite ne peut pas être garantie.
 
+## Attitude pendant la conversation
+
+L’état réel du personnage est observé dans GTA pendant la session. Un PNJ calme à portée s’arrête, se tourne vers le joueur et le regarde. Lorsqu’il n’est plus sollicité ou que le joueur quitte la portée d’interaction, un passant reprend sa marche; les PNJ de démonstration restent disponibles. La conversation ne fige pas physiquement le personnage.
+
+La fuite et le combat sont prioritaires : aucun arrêt, rotation ou tâche de conversation ne remplace leur action en cours. Un PNJ effrayé conserve sa fuite, avec des instructions vocales de peur, tension et essoufflement. Un PNJ qui combat le joueur reçoit des instructions de colère et de propos agressifs. Un combat avec quelqu’un d’autre est distingué afin de ne pas attribuer arbitrairement une attaque au joueur. Les changements de ton sont transmis à la même session Realtime, en conservant la voix, le profil et les souvenirs.
+
+Si le personnage devient effrayé ou agressif pendant une réponse calme, cette réponse peut être interrompue pour reprendre avec le nouvel état, après confirmation de mise à jour Realtime. Pendant la prise de parole du joueur, le changement prépare la réponse suivante. Les transitions de retour au calme sont temporisées pour éviter de stopper une fuite sur un changement d’état très bref. Le rendu exact de la peur et de la colère dépend du modèle vocal et reste à vérifier en jeu.
+
+Les tâches d’un métier ne sont pas interrompues par la posture de conversation calme. En revanche, une fuite ou un combat annule un service en cours; le nettoyage du service ne remplace pas les tâches de fuite ou de combat. Les observations de comportement viennent du client FiveM et servent à la conversation et à l’interruption du service, pas à établir une preuve d’infraction.
+
 ## Premier métier : mécanicien
 
 Le métier `mechanic` expose deux outils Realtime : établir un devis, puis effectuer un service après accord oral explicite. Marcel est mécanicien; les modèles de mécaniciens listés dans `jobs[].models` reçoivent également ce métier. Les autres passants reçoivent un métier de la liste. Un métier narratif sans outils ne peut pas encore agir.

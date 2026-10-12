@@ -53,7 +53,7 @@ function NetworkGetNetworkIdFromEntity()return 101 end
 `;
 function run(assertions,{ready=true}={}){
  const L=lauxlib.luaL_newstate();lualib.luaL_openlibs(L);
- const source=fixture+'\n'+fs.readFileSync(path.join(__dirname,'../client/main.lua'),'utf8')+'\nthreads[1]()\n'+(ready?'callbacks.ready({},function()end)\n':'')+assertions;
+ const source=fixture+'\n'+fs.readFileSync(path.join(__dirname,'../client/behavior.lua'),'utf8')+'\n'+fs.readFileSync(path.join(__dirname,'../client/main.lua'),'utf8')+'\nthreads[1]()\n'+(ready?'callbacks.ready({},function()end)\n':'')+assertions;
  try{const code=lauxlib.luaL_dostring(L,to_luastring(source));assert.equal(code,lua.LUA_OK,code===lua.LUA_OK?undefined:to_jsstring(lua.lua_tostring(L,-1)));}finally{lua.lua_close(L);}
 }
 test('fixed NPC voice opens immediately without a resolver request',()=>run(`
@@ -259,4 +259,63 @@ GetIsDoorValid=function()error('hood native failed')end
 threads[3]()
 assert(network[#network].name=='fivemai:jobArrived' and network[#network].args[1]==false and network[#network].args[2]=='script')
 assert(repairs==0)
+`));
+
+test('calm conversation stops movement, faces the player and maintains eye contact',()=>run(`
+local actions={}
+NetworkHasControlOfEntity=function()return true end
+TaskTurnPedToFaceEntity=function(ped,player)assert(ped==10 and player==99)table.insert(actions,'face')end
+TaskLookAtEntity=function(ped,player)assert(player==99)table.insert(actions,'look')end
+TaskStandStill=function()table.insert(actions,'stand')end
+commands['+fivemai_talk']()
+assert(actions[1]=='face' and actions[2]=='look')
+clock=clock+1000
+FivemAIBehavior.pose(10,99,true,true,false)
+assert(actions[3]=='stand' and actions[4]=='look')
+`));
+test('a fleeing NPC keeps running during opening and closing of conversation',()=>run(`
+IsPedFleeing=function()return true end
+TaskTurnPedToFaceEntity=function()error('Must not turn a fleeing NPC')end
+TaskLookAtEntity=function()error('Must not hold a fleeing NPC')end
+TaskStandStill=function()error('Must not stop a fleeing NPC')end
+TaskWanderStandard=function()error('Must not replace a flee task')end
+commands['+fivemai_talk']()
+assert(FivemAIBehavior.observe(10,99)=='afraid')
+events['fivemai:closed']()
+`));
+test('a fighting NPC is angry and never receives a conversation standstill task',()=>run(`
+IsPedInCombat=function(_,target)return target==99 end
+TaskTurnPedToFaceEntity=function()error('Must not interrupt combat')end
+TaskStandStill=function()error('Must not stop combat')end
+commands['+fivemai_talk']()
+assert(FivemAIBehavior.observe(10,99)=='angry')
+local mood
+TriggerServerEvent=function(name,_,_,state)if name=='fivemai:offer' then mood=state end end
+callbacks.offer({npcId='marcel_dubois',sdp='v=0'},function()end)
+assert(mood=='angry')
+`));
+test('transition from calm to fear releases attention without overriding the flee task',()=>run(`
+NetworkHasControlOfEntity=function()return true end
+TaskTurnPedToFaceEntity=function()end
+TaskLookAtEntity=function()end
+commands['+fivemai_talk']()
+assert(FivemAIBehavior.held[10])
+IsPedFleeing=function()return true end
+TaskStandStill=function()error('Must not overwrite fleeing')end
+TaskWanderStandard=function()error('Must not overwrite fleeing')end
+FivemAIBehavior.pose(10,99,true,true,false)
+assert(not FivemAIBehavior.held[10])
+events['fivemai:closed']()
+`));
+test('conversation attention does not overwrite mechanic movement or animation',()=>run(`
+NetworkHasControlOfEntity=function()return true end
+TaskTurnPedToFaceEntity=function()error('Do not turn a working mechanic')end
+TaskStandStill=function()error('Do not stop a working mechanic')end
+assert(FivemAIBehavior.pose(10,99,true,true,true)=='calm')
+`));
+test('job completion while a NPC is afraid never clears its flee task',()=>run(movementFixture+`
+threads[3]()
+IsPedFleeing=function()return true end
+ClearPedTasks=function()error('Do not clear a flee task')end
+events['fivemai:jobEnd']({token='job-a'})
 `));
