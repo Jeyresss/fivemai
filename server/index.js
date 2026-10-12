@@ -32,6 +32,7 @@ function inspectVehicle(ctx,selection={}){
 function finishJob(token,result){
   const pending=pendingJobs.get(token);if(!pending)return;
   pendingJobs.delete(token);clearTimeout(pending.timer);
+  if(!result.ok)console.warn(`[fivemai] Intervention mécanicien interrompue: ${result.error}`);
   emitNet('fivemai:jobEnd',pending.ctx.src,{token});pending.resolve(result);
 }
 const mechanic=new MechanicJob({inspect:inspectVehicle,
@@ -47,12 +48,13 @@ onNet('fivemai:jobArrived',(token,success,reason)=>{
  const src=Number(global.source),pending=pendingJobs.get(token);
  if(!pending||pending.ctx.src!==src||pending.stage!=='walking')return;
  if(success!==true){
-  const reasons={control:'Impossible de prendre le contrôle du PNJ ou du véhicule',hood:'Le capot ne peut pas être ouvert sur ce véhicule',moved:'Le véhicule a bougé',path:'Le mécanicien ne peut pas rejoindre le capot'};
+  const reasons={script:'Erreur de préparation sur le client; consulter F8',control:'Impossible de prendre le contrôle du PNJ ou du véhicule',hood:'Le capot ne peut pas être ouvert sur ce véhicule',moved:'Le véhicule a bougé',path:'Le mécanicien ne peut pas rejoindre le capot'};
   return finishJob(token,{ok:false,error:reasons[reason]||'Le mécanicien ne peut pas rejoindre le capot ou le véhicule a bougé'});
  }
  try{
   if(inspectVehicle(pending.ctx,{selected:pending.quote.vehicle}).netId!==pending.quote.vehicle.netId)throw new Error('Véhicule changé');
   clearTimeout(pending.timer);pending.stage='working';
+  console.log('[fivemai] Mécanicien arrivé : début des quatre secondes de travail.');
   pending.timer=setTimeout(()=>{
    try{
     if(inspectVehicle(pending.ctx,{selected:pending.quote.vehicle}).netId!==pending.quote.vehicle.netId)throw new Error('Véhicule changé pendant l’intervention');

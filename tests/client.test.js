@@ -228,3 +228,35 @@ assert(network[#network].name=='fivemai:jobResult' and network[#network].args[1]
 events['fivemai:jobEnd']({token='job-a'})
 assert(hood==0,'Close the hood we opened when service finishes')
 `));
+
+test('ped root above the ground target still allows hood animation and actual repair',()=>run(movementFixture+`
+TaskFollowNavMeshToCoord=function(ped,x,y,z)
+ table.insert(steps,'walk');positions[ped]=vector3(x,y,z+1.0)
+end
+threads[3]()
+assert(network[#network].name=='fivemai:jobArrived' and network[#network].args[1]==true)
+assert(hood==1)
+events['fivemai:jobApply']({token='job-a',netId=44,npcId='marcel_dubois',service='repair'})
+threads[4]()
+assert(repairs==1,'A ped standing on the floor must not fail the 3D root check')
+`));
+test('a ped on another floor cannot report arrival or apply the repair',()=>run(movementFixture+`
+TaskFollowNavMeshToCoord=function(ped,x,y,z)positions[ped]=vector3(x,y,z+4.0)end
+threads[3]()
+assert(network[#network].args[1]==false)
+assert(repairs==0)
+`));
+test('missing bonnet animation does not prevent a valid parked vehicle repair',()=>run(movementFixture+`
+GetIsDoorValid=function()return false end
+threads[3]()
+assert(network[#network].name=='fivemai:jobArrived' and network[#network].args[1]==true)
+events['fivemai:jobApply']({token='job-a',netId=44,npcId='marcel_dubois',service='repair'})
+threads[4]()
+assert(repairs==1)
+`));
+test('native error after approach reports failure instead of stranding the job',()=>run(movementFixture+`
+GetIsDoorValid=function()error('hood native failed')end
+threads[3]()
+assert(network[#network].name=='fivemai:jobArrived' and network[#network].args[1]==false and network[#network].args[2]=='script')
+assert(repairs==0)
+`));

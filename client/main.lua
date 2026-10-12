@@ -261,6 +261,15 @@ local function takeControl(entity, deadline)
     end
     return DoesEntityExist(entity) and NetworkHasControlOfEntity(entity)
 end
+local function atWorkPosition(ped, target, radius)
+    local coords = GetEntityCoords(ped)
+    local dx, dy = coords.x - target.x, coords.y - target.y
+    -- Ped coordinates are above their feet; the navmesh target is on the floor.
+    return dx * dx + dy * dy <= radius * radius and math.abs(coords.z - target.z) <= 2.0
+end
+local function mechanicLog(message)
+    print('[fivemai] Mécanicien : ' .. message)
+end
 RegisterNetEvent('fivemai:jobStart', function(data)
     local ped = currentNpc and currentNpc.id == data.npcId and currentPed or (data.npcNetId and NetToPed(data.npcNetId) or peds[data.npcId])
     local vehicle = NetworkDoesEntityExistWithNetworkId(data.netId) and NetToVeh(data.netId) or 0
@@ -272,6 +281,7 @@ RegisterNetEvent('fivemai:jobStart', function(data)
     local job = {token=data.token, ped=ped, vehicle=vehicle, origin=GetEntityCoords(ped), heading=GetEntityHeading(ped), fixed=peds[data.npcId]==ped, serial=movementSerial}
     workingJob = job
     CreateThread(function()
+        local success, err = xpcall(function()
         local deadline = GetGameTimer() + 15000
         if not takeControl(ped, GetGameTimer() + 2000) or not takeControl(vehicle, GetGameTimer() + 2000) then
             TriggerServerEvent('fivemai:jobArrived', job.token, false, 'control')
@@ -288,9 +298,11 @@ RegisterNetEvent('fivemai:jobStart', function(data)
         local center = GetEntityCoords(vehicle)
         local heading = GetHeadingFromVector_2d(center.x - target.x, center.y - target.y)
         TaskFollowNavMeshToCoord(ped, target.x, target.y, target.z, 1.0, 15000, 0.65, 0, heading)
+        local failureReason = 'path'
         while workingJob == job and DoesEntityExist(ped) and DoesEntityExist(vehicle) and GetGameTimer() < deadline do
-            if entityDistance(GetEntityCoords(vehicle), startVehicle) > 0.5 or GetEntitySpeed(vehicle) > 0.3 then break end
-            if entityDistance(GetEntityCoords(ped), target) <= 0.9 then
+            if entityDistance(GetEntityCoords(vehicle), startVehicle) > 0.5 or GetEntitySpeed(vehicle) > 0.3 then failureReason = 'moved' break end
+            if atWorkPosition(ped, target, 1.3) then
+                mechanicLog('arrivé devant le capot')
                 TaskAchieveHeading(ped, heading, 700)
                 Wait(700)
                 if workingJob ~= job or not DoesEntityExist(vehicle) or entityDistance(GetEntityCoords(vehicle), startVehicle) > 0.5 then break end
@@ -304,12 +316,14 @@ RegisterNetEvent('fivemai:jobStart', function(data)
                         SetVehicleDoorOpen(vehicle, 4, false, false)
                         job.openedHood = true
                         Wait(400)
-                    elseif data.service == 'repair' then
-                        TriggerServerEvent('fivemai:jobArrived', job.token, false, 'hood')
-                        return
+                        mechanicLog(GetVehicleDoorAngleRatio(vehicle, 4) > 0.05 and 'capot ouvert' or 'ouverture du capot demandée; ce modèle ne confirme pas son animation')
+                    else
+                        -- Missing/damaged/custom bonnets must not prevent repairing the engine.
+                        mechanicLog('capot absent ou non animé sur ce modèle; réparation maintenue')
                     end
                     if workingJob ~= job or not DoesEntityExist(vehicle) or entityDistance(GetEntityCoords(vehicle), startVehicle) > 0.5 then break end
                     TaskPlayAnim(ped, 'mini@repair', 'fixing_a_ped', 3.0, -3.0, -1, 1, 0, false, false, false)
+                    mechanicLog('animation lancée, validation envoyée au serveur')
                     TriggerServerEvent('fivemai:jobArrived', job.token, true)
                     return
                 end
@@ -317,7 +331,19 @@ RegisterNetEvent('fivemai:jobStart', function(data)
             end
             Wait(100)
         end
-        if workingJob == job then TriggerServerEvent('fivemai:jobArrived', job.token, false) end
+        if workingJob == job then
+            if DoesEntityExist(ped) then
+                local coords = GetEntityCoords(ped)
+                local dx, dy = coords.x - target.x, coords.y - target.y
+                mechanicLog(string.format('préparation interrompue (%s), distance au point au sol=%.2f m, décalage vertical=%.2f m', failureReason, math.sqrt(dx * dx + dy * dy), math.abs(coords.z - target.z)))
+            end
+            TriggerServerEvent('fivemai:jobArrived', job.token, false, failureReason)
+        end
+        end, function(error) return tostring(error) end)
+        if not success and workingJob == job then
+            mechanicLog('erreur de préparation : ' .. tostring(err))
+            TriggerServerEvent('fivemai:jobArrived', job.token, false, 'script')
+        end
     end)
 end)
 RegisterNetEvent('fivemai:jobEnd', function(data)
@@ -335,7 +361,7 @@ RegisterNetEvent('fivemai:jobEnd', function(data)
             TaskFollowNavMeshToCoord(job.ped, job.origin.x, job.origin.y, job.origin.z, 1.0, 15000, 0.65, 0, job.heading)
             local deadline = GetGameTimer() + 15000
             while movementSerial == job.serial and DoesEntityExist(job.ped) and GetGameTimer() < deadline do
-                if entityDistance(GetEntityCoords(job.ped), job.origin) <= 0.9 then
+                if atWorkPosition(job.ped, job.origin, 1.3) then
                     FreezeEntityPosition(job.ped, true)
                     return
                 end
@@ -355,7 +381,7 @@ RegisterNetEvent('fivemai:jobApply', function(data)
             ok = workingJob == job and currentNpc and currentNpc.id == data.npcId and NetworkHasControlOfEntity(vehicle) and job.vehicle == vehicle and entityDistance(GetEntityCoords(PlayerPedId()), GetEntityCoords(vehicle)) <= 12
         end
         if ok then
-            ok = DoesEntityExist(job.ped) and entityDistance(GetEntityCoords(job.ped), job.target) <= 1.2 and entityDistance(GetEntityCoords(vehicle), job.vehicleOrigin) <= 0.5 and GetEntitySpeed(vehicle) <= 0.3
+            ok = DoesEntityExist(job.ped) and atWorkPosition(job.ped, job.target, 1.6) and entityDistance(GetEntityCoords(vehicle), job.vehicleOrigin) <= 0.5 and GetEntitySpeed(vehicle) <= 0.3
         end
         if ok and data.service == 'repair' then
             SetVehicleFixed(vehicle)
@@ -371,6 +397,7 @@ RegisterNetEvent('fivemai:jobApply', function(data)
         else
             ok = false
         end
+        mechanicLog(ok and 'intervention appliquée avec succès' or 'intervention refusée : position, contrôle réseau ou véhicule invalidé')
         TriggerServerEvent('fivemai:jobResult', data.token, ok)
     end)
 end)
