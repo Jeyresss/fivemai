@@ -1,8 +1,10 @@
 const fs=require('node:fs');
 const path=require('node:path');
-const WebSocket=require('ws');
-const {MemoryStore,sessionConfig,distance}=require('./core');
 const root=GetResourcePath(GetCurrentResourceName());
+// FiveM evaluates scripts with a synthetic module at the resource root.
+const resourceRequire=require('node:module').createRequire(path.join(root,'package.json'));
+const WebSocket=resourceRequire('ws');
+const {MemoryStore,sessionConfig,distance}=resourceRequire('./server/core.js');
 const config=JSON.parse(fs.readFileSync(path.join(root,'config.json'),'utf8'));
 const memory=new MemoryStore(path.join(root,'data','memory.json'));
 const active=new Map(), cooldown=new Map();
