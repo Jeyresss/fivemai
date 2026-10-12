@@ -41,7 +41,7 @@ RegisterCommand('+fivemai_talk', function()
     if not talking then
         talking = true
         currentNpc = nearest
-        SendNUIMessage({type='open', npc={id=nearest.id, name=nearest.firstName .. ' ' .. nearest.lastName}})
+        SendNUIMessage({type='open', microphone=GetResourceKvpString('fivemai_microphone'), npc={id=nearest.id, name=nearest.firstName .. ' ' .. nearest.lastName}})
     end
     SendNUIMessage({type='ptt', held=true})
 end, false)
@@ -85,4 +85,21 @@ end)
 AddEventHandler('onResourceStop', function(name)
     if name ~= GetCurrentResourceName() then return end
     for _, ped in pairs(peds) do DeleteEntity(ped) end
+end)
+
+-- F8 commands only; no menu and no NUI focus.
+RegisterCommand('pnjmicro', function(_, args)
+    if args[1] == 'default' then
+        DeleteResourceKvp('fivemai_microphone')
+        print('[fivemai] Micro Windows par défaut sélectionné. Éloignez-vous puis revenez pour reconnecter.')
+        return
+    end
+    SendNUIMessage({type='microphones', index=tonumber(args[1])})
+end, false)
+RegisterNUICallback('microphone', function(data, cb)
+    if type(data.deviceId) == 'string' and #data.deviceId < 512 then
+        SetResourceKvp('fivemai_microphone', data.deviceId)
+        print('[fivemai] Micro sélectionné : ' .. tostring(data.label) .. '. Éloignez-vous puis revenez pour reconnecter.')
+    end
+    cb({ok=true})
 end)

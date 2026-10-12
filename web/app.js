@@ -5,6 +5,14 @@ class PushToTalk {
     this.ready=false;this.held=false;this.recording=false;this.pending=false;this.generating=false;this.playing=false;this.releaseTimer=null;this.ackTimer=null;
     track.enabled=false;
   }
+  static audioStats(report){
+    let level=null,bytes=null;
+    for(const item of report.values()){
+      if(item.type==='media-source' && item.kind==='audio' && Number.isFinite(item.audioLevel)) level=Math.max(level||0,item.audioLevel);
+      if(item.type==='outbound-rtp' && (item.kind==='audio'||item.mediaType==='audio') && Number.isFinite(item.bytesSent))bytes=(bytes||0)+item.bytesSent;
+    }
+    return {level,bytes};
+  }
   connected(){this.ready=true;this.status('Connecté. Maintenez votre touche pour parler.');if(this.held)this.begin();}
   setHeld(held){if(held===this.held)return;this.held=held;if(held)this.begin();else this.end();}
   begin(){
@@ -43,25 +51,65 @@ class PushToTalk {
 if(typeof module !== 'undefined' && module.exports) module.exports=PushToTalk;
 if(typeof document !== 'undefined') {
 const $=id=>document.getElementById(id);
-let pc,stream,channel,ptt,timer,hideTimer,generation=0,held=false;
+let pc,stream,channel,ptt,timer,hideTimer,generation=0,held=false,meterTimer=null,meterBusy=false,turnHealth=null;
 const post=(name,data={})=>fetch(`https://${GetParentResourceName()}/${name}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
 function status(message){$('hud').hidden=false;$('status').textContent=message;}
 function diagnostic(message){void post('diagnostic',{message}).catch(()=>{});}
+async function inspectAudio(peer,run){
+  if(meterBusy || run!==generation || !ptt?.recording || !peer.getStats)return;
+  meterBusy=true;
+  try{
+    const sample=PushToTalk.audioStats(await peer.getStats());
+    if(run!==generation || !ptt?.recording || !turnHealth)return;
+    turnHealth.samples++;
+    if(sample.level!==null){turnHealth.measured=true;turnHealth.peak=Math.max(turnHealth.peak,sample.level);$('level').textContent=`Micro : ${Math.round(Math.min(1,sample.level)*100)} %`;}
+    else $('level').textContent='Niveau micro non disponible';
+    if(sample.bytes!==null){turnHealth.firstBytes ??= sample.bytes;turnHealth.lastBytes=sample.bytes;}
+  }catch{ /* Some CEF builds do not expose audio stats. */ }
+  finally{meterBusy=false;}
+}
+function reportTurn(){
+  if(!turnHealth)return;
+  const t=turnHealth;turnHealth=null;$('level').textContent='';
+  if(t.samples<2)return;
+  const bytes=t.firstBytes!==null ? t.lastBytes-t.firstBytes : null;
+  diagnostic(`Micro: niveau maximum=${t.measured ? (t.peak*100).toFixed(2)+'%' : 'indisponible'}, audio envoyé=${bytes===null ? 'indisponible' : bytes+' octets'}.`);
+  if(t.measured && t.peak<0.001){$('level').textContent='Micro silencieux : vérifiez Windows ou lancez pnjmicro dans F8.';diagnostic('Aucun signal micro détecté pendant la prise de parole.');}
+  else if(bytes===0){$('level').textContent='Aucun paquet audio envoyé. Vérifiez le réseau WebRTC; consultez F8.';}
+}
+async function microphones(index){
+  let temporary;
+  try{
+    if(!navigator.mediaDevices?.enumerateDevices)throw new Error('Liste des microphones indisponible dans FiveM.');
+    if(!stream)temporary=await navigator.mediaDevices.getUserMedia({audio:true});
+    const devices=(await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='audioinput');
+    if(index!==undefined){
+      const device=devices[index-1];if(!device)throw new Error('Numéro de microphone invalide. Lancez pnjmicro dans F8.');
+      await post('microphone',{deviceId:device.deviceId,label:device.label||`Micro ${index}`});
+    }else{
+      diagnostic('Microphones Windows disponibles (sélection: pnjmicro NUMERO):');
+      devices.forEach((d,i)=>diagnostic(`${i+1}. ${d.label || 'Microphone'}${d.deviceId==='default' ? ' [défaut Windows]' : ''}`));
+    }
+  }catch(e){diagnostic(e.message);}
+  finally{temporary?.getTracks().forEach(t=>t.stop());}
+}
 function cleanup(){
-  generation++;clearTimeout(timer);ptt?.dispose();
+  generation++;clearTimeout(timer);clearInterval(meterTimer);meterTimer=null;turnHealth=null;$('level').textContent='';ptt?.dispose();
   const old=pc;pc=null;channel?.close();old?.close();
   stream?.getTracks().forEach(t=>t.stop());stream=channel=ptt=null;held=false;$('voice').srcObject=null;
 }
 function fail(message){cleanup();status(message);diagnostic(message);void post('close').catch(()=>{});}
-async function connect(npc){
+async function connect(npc,microphone){
   cleanup();clearTimeout(hideTimer);$('name').textContent=npc.name;status('Connexion… Attendez avant de parler.');
   const run=generation;
   timer=setTimeout(()=>{if(run===generation)fail('Connexion expirée. Vérifiez le réseau WebRTC et consultez F8.');},30000);
   try{
     if(!navigator.mediaDevices?.getUserMedia)throw new Error('Le microphone WebRTC est indisponible dans cette NUI FiveM.');
-    const media=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
+    const media=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,...(microphone ? {deviceId:{exact:microphone}} : {})}});
     if(run!==generation){media.getTracks().forEach(t=>t.stop());return;}
     stream=media;const track=stream.getAudioTracks()[0];track.enabled=false;
+    diagnostic(`Microphone utilisé : ${track.label || 'périphérique Windows par défaut'}; état=${track.readyState || 'inconnu'}.`);
+    track.onmute=()=>diagnostic('Le système a suspendu la capture du microphone.');
     track.onended=()=>{if(run===generation)fail('Microphone déconnecté. Vérifiez votre périphérique audio.');};
     const peer=new RTCPeerConnection();pc=peer;
     peer.ontrack=e=>{
@@ -71,7 +119,7 @@ async function connect(npc){
     peer.addTrack(track,stream);channel=peer.createDataChannel('oai-events');
     ptt=new PushToTalk({send:e=>{if(channel?.readyState==='open')channel.send(JSON.stringify(e));},track,status});
     ptt.setHeld(held);
-    channel.onopen=()=>{if(run!==generation)return;clearTimeout(timer);ptt.connected();};
+    channel.onopen=()=>{if(run!==generation)return;clearTimeout(timer);ptt.connected();if(ptt.recording)turnHealth={samples:0,measured:false,peak:0,firstBytes:null,lastBytes:null};meterTimer=setInterval(()=>void inspectAudio(peer,run),200);};
     channel.onclose=()=>{if(run===generation)fail('Canal vocal fermé. Relâchez puis réessayez.');};
     channel.onmessage=({data})=>{
       if(run!==generation)return;
@@ -91,8 +139,14 @@ async function connect(npc){
   }catch(e){if(run===generation)fail(e.name==='NotAllowedError'?'Accès microphone refusé par FiveM/Windows. Consultez F8.':e.message);}
 }
 window.addEventListener('message',async({data})=>{
-  if(data.type==='open')void connect(data.npc);
-  if(data.type==='ptt'){held=Boolean(data.held);ptt?.setHeld(held);}
+  if(data.type==='open')void connect(data.npc,data.microphone);
+  if(data.type==='microphones')void microphones(data.index);
+  if(data.type==='ptt'){
+    held=Boolean(data.held);
+    if(!held)reportTurn();
+    ptt?.setHeld(held);
+    if(held && ptt?.recording)turnHealth={samples:0,measured:false,peak:0,firstBytes:null,lastBytes:null};
+  }
   if(data.type==='answer' && pc){const run=generation;try{await pc.setRemoteDescription({type:'answer',sdp:data.sdp});}catch{if(run===generation)fail('Réponse WebRTC invalide.');}}
   if(data.type==='error')fail(data.message);
   if(data.type==='closed'){cleanup();hideTimer=setTimeout(()=>{$('hud').hidden=true;},8000);}

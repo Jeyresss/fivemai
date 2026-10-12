@@ -21,3 +21,9 @@ test('new speech interrupts response and clears playback',()=>{
 test('closing during release cancels pending audio and leaves microphone off',()=>{
  const s=setup();s.ptt.connected();s.ptt.setHeld(true);s.advance(800);s.ptt.setHeld(false);s.ptt.dispose();s.flush();assert.equal(s.sent.some(e=>e.type==='input_audio_buffer.commit'),false);assert.equal(s.track.enabled,false);
 });
+
+test('microphone stats distinguish real input from transport and missing statistics',()=>{
+ assert.deepEqual(PushToTalk.audioStats(new Map()),{level:null,bytes:null});
+ assert.deepEqual(PushToTalk.audioStats(new Map([['mic',{type:'media-source',kind:'audio',audioLevel:0}],['rtp',{type:'outbound-rtp',kind:'audio',bytesSent:2500}]])),{level:0,bytes:2500});
+ assert.deepEqual(PushToTalk.audioStats(new Map([['mic',{type:'media-source',kind:'audio',audioLevel:0.25}],['rtp',{type:'outbound-rtp',kind:'audio',bytesSent:3000}],['video',{type:'outbound-rtp',kind:'video',bytesSent:500000}]])),{level:0.25,bytes:3000});
+});

@@ -49,3 +49,11 @@ Le JSON convient à un prototype mono-instance; un serveur chargé nécessitera 
 Les tests cloud couvrent persistance, isolation des mémoires, rétention, requêtes API, activation du micro et séquence commit audio → réponse; ils ne remplacent pas ces vérifications.
 
 Si le PNJ reste silencieux : vérifier que l’indicateur passe à « Connecté », puis « Le PNJ vous écoute » pendant la pression et « Le PNJ prépare sa réponse » après relâchement. Les erreurs de microphone, de lecture, de connexion et les refus OpenAI sont affichés et envoyés dans F8. Vérifier le microphone par défaut de Windows et ses autorisations. Le fait que la création de l’appel réussisse ne prouve pas que le navigateur capture du son ni que le réseau transporte l’audio.
+
+### Microphone silencieux ou mauvais périphérique (Windows)
+
+L’indicateur affiche le niveau du micro pendant la touche maintenue, quand Chromium expose ces statistiques. F8 affiche le périphérique réellement utilisé, le niveau maximum et les octets audio envoyés. Un appel accepté ou des octets envoyés ne garantissent pas un signal vocal : WebRTC peut envoyer du silence. Un niveau non disponible ne signifie pas un niveau nul.
+
+Dans **F8** (sans menu) : `pnjmicro` liste les entrées audio Windows. `pnjmicro 2` sélectionne par exemple la deuxième entrée; utilisez le numéro de votre microphone dans la liste. Éloignez-vous du PNJ pour fermer la connexion, puis revenez et maintenez la touche pour reconnecter. Le choix est conservé localement sur ce client FiveM. `pnjmicro default` revient au périphérique Windows par défaut. Le réglage du micro dans le chat vocal GTA/FiveM ne change pas nécessairement le micro de la NUI. Si le périphérique disparaît, resélectionnez-le ou revenez au défaut; la capture ne bascule pas silencieusement vers un autre appareil.
+
+Vérifier aussi le signal dans Windows → Système → Son → Entrée et les autorisations microphone des applications de bureau. Parler seulement après « Connecté ». Ces diagnostics et la sélection d’appareil ne garantissent pas la capture sur chaque build FiveM : les statistiques et le test en jeu permettent de localiser le problème restant.
