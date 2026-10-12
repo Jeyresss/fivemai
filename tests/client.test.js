@@ -46,6 +46,7 @@ function DoesEntityExist()return true end
 function IsPedAPlayer(ped)return ped==99 end
 function IsPedHuman()return true end
 function IsEntityDead()return false end
+function GetEntityModel(ped)return ped==10 and 123 or 124 end
 function NetworkGetEntityIsNetworked()return true end
 function NetworkRegisterEntityAsNetworked()end
 function NetworkGetNetworkIdFromEntity()return 101 end
@@ -129,4 +130,31 @@ assert(sent[1].type=='notice')
 GetEntityCoords=originalCoords
 commands['+fivemai_talk']()
 assert(sent[2].type=='open')
+`));
+
+test('native ped enumeration finds a close NPC missing from the game pool snapshot',()=>run(`
+target=20
+GetGamePool=function()return {}end
+FindFirstPed=function()return 12,20 end
+FindNextPed=function()return false,0 end
+local ended=false
+EndFindPed=function(handle)assert(handle==12)ended=true end
+commands['+fivemai_talk']()
+threads[3]()
+assert(network[1].name=='fivemai:resolve')
+assert(ended,'Native enumeration handle must be released')
+`));
+test('configured mechanic can be recognized from its model and spawn coordinates',()=>run(`
+target=20
+GetEntityModel=function()return 123 end
+commands['+fivemai_talk']()
+assert(#network==0)
+assert(sent[1].type=='open' and sent[1].npc.id=='marcel_dubois')
+`));
+test('player character standing nearby is diagnosed rather than treated as an NPC',()=>run(`
+target=20
+IsPedAPlayer=function(ped)return ped==20 end
+commands['+fivemai_talk']()
+assert(sent[1].type=='notice')
+assert(string.find(logs[#logs-1],'joueur=true'))
 `));

@@ -22,31 +22,63 @@ local currentNpc, currentPed, candidate = nil, nil, nil
 local pressed = false
 local requestSerial = 0
 local nuiReady, queuedOpen, uiSession = false, nil, 0
+local lastSearch = nil
+local function entityDistance(a, b)
+    local dx, dy, dz = a.x - b.x, a.y - b.y, a.z - b.z
+    return math.sqrt(dx * dx + dy * dy + dz * dz)
+end
 local function nearestNpc()
-    local pos = GetEntityCoords(PlayerPedId())
-    local nearest, best = nil, config.interactionDistance
-    -- Configured peds must remain usable independently of population scanning.
-    for id, ped in pairs(peds) do
-        if DoesEntityExist(ped) and not IsEntityDead(ped) then
-            local d = #(pos - GetEntityCoords(ped))
-            if d <= best then nearest, best = {ped=ped, id=id}, d end
+    local player = PlayerPedId()
+    local pos = GetEntityCoords(player)
+    local nearest, best = nil, tonumber(config.interactionDistance) or 3
+    local seen = {}
+    lastSearch = {count=0, eligible=0, distance=math.huge}
+    local function consider(ped, fixedId)
+        if not ped or ped == player or seen[ped] or not DoesEntityExist(ped) then return end
+        seen[ped] = true
+        local coords = GetEntityCoords(ped)
+        local d = entityDistance(pos, coords)
+        local dead, isPlayer, human = IsEntityDead(ped), IsPedAPlayer(ped), IsPedHuman(ped)
+        lastSearch.count = lastSearch.count + 1
+        if d < lastSearch.distance then lastSearch.distance, lastSearch.dead, lastSearch.isPlayer, lastSearch.human = d, dead, isPlayer, human end
+        if dead or isPlayer or not human then return end
+        lastSearch.eligible = lastSearch.eligible + 1
+        -- Recover the configured identity of a demo ped discovered through
+        -- enumeration, rather than treating it as an unrelated ambient NPC.
+        if not fixedId then
+            for _, profile in ipairs(config.npcs or {}) do
+                if GetEntityModel(ped) == joaat(profile.model) and entityDistance(coords, vector3(profile.coords.x, profile.coords.y, profile.coords.z)) <= 2 then
+                    fixedId = profile.id
+                    break
+                end
+            end
         end
+        if (fixedId or config.ambientNPCs) and d <= best then nearest, best = {ped=ped, id=fixedId}, d end
     end
+    for id, ped in pairs(peds) do consider(ped, id) end
     if nearest then return nearest end
-    if not config.ambientNPCs then return nil end
     local ok, pool = pcall(GetGamePool, 'CPed')
-    if not ok or type(pool) ~= 'table' then
-        print('[fivemai] Population PNJ indisponible; les PNJ configurés restent utilisables.')
-        return nil
-    end
-    for _, ped in pairs(pool) do
-        if DoesEntityExist(ped) and not IsPedAPlayer(ped) and IsPedHuman(ped) and not IsEntityDead(ped) then
-            local d = #(pos - GetEntityCoords(ped))
-            if d <= best then nearest, best = {ped=ped}, d end
+    if ok and type(pool) == 'table' then for _, ped in pairs(pool) do consider(ped) end end
+    -- Newly streamed peds are not always present in a cached pool snapshot.
+    if not nearest and type(FindFirstPed) == 'function' then
+        local handle, ped = FindFirstPed()
+        if handle and handle ~= -1 then
+            local more = true
+            repeat
+                consider(ped)
+                more, ped = FindNextPed(handle)
+            until not more
+            EndFindPed(handle)
         end
     end
     return nearest
 end
+local function printSearch()
+    if not lastSearch then return end
+    local near = lastSearch.distance < math.huge and string.format('%.2f m', lastSearch.distance) or 'aucun'
+    print('[fivemai] Recherche PNJ : ' .. lastSearch.count .. ' détectés, ' .. lastSearch.eligible .. ' éligibles; plus proche=' .. near .. ', joueur=' .. tostring(lastSearch.isPlayer) .. ', mort=' .. tostring(lastSearch.dead) .. ', humain=' .. tostring(lastSearch.human))
+end
+RegisterCommand('pnjdiag', function() nearestNpc() printSearch() end, false)
 local function closeConversation(notifyServer)
     uiSession = uiSession + 1
     queuedOpen = nil
@@ -100,7 +132,8 @@ RegisterCommand('+fivemai_talk', function()
     if pressed then return end
     local nearest = nearestNpc()
     if not nearest then
-        print('[fivemai] Touche détectée : approchez-vous à moins de ' .. tostring(config.interactionDistance) .. ' mètres d’un PNJ vivant.')
+        printSearch()
+        print('[fivemai] Aucun PNJ éligible détecté à portée (' .. tostring(config.interactionDistance) .. ' m).')
         SendNUIMessage({type='notice', message='Approchez-vous d’un PNJ vivant pour lui parler.'})
         return
     end
@@ -161,7 +194,7 @@ CreateThread(function()
             local ped = currentPed
             if currentNpc.netId and NetworkDoesEntityExistWithNetworkId(currentNpc.netId) then ped = NetToPed(currentNpc.netId) currentPed = ped end
             local coords = ped and DoesEntityExist(ped) and GetEntityCoords(ped) or vector3(currentNpc.coords.x, currentNpc.coords.y, currentNpc.coords.z)
-            local distance = #(GetEntityCoords(PlayerPedId()) - coords)
+            local distance = entityDistance(GetEntityCoords(PlayerPedId()), coords)
             SendNUIMessage({type='proximity', distance=distance, fullDistance=config.voiceFullDistance or 3, maxDistance=config.voiceMaxDistance or 18})
             if pressed and distance > config.interactionDistance + 1 then
                 pressed = false
@@ -186,7 +219,8 @@ RegisterNetEvent('fivemai:error', function(message)
 end)
 RegisterNetEvent('fivemai:closed', function() closeConversation(false) end)
 RegisterNUICallback('diagnostic', function(data, cb)
-    print('[fivemai] ' .. tostring(data.message))
+    local text = type(data.message) == 'string' and data.message ~= '' and data.message or 'Diagnostic vide reçu de l’interface vocale.'
+    print('[fivemai] ' .. text)
     cb({ok=true})
 end)
 AddEventHandler('onResourceStop', function(name)
@@ -204,6 +238,10 @@ RegisterCommand('pnjmicro', function(_, args)
     end
     SendNUIMessage({type='microphones', index=tonumber(args[1])})
 end, false)
+RegisterNUICallback('microphoneFallback', function(data, cb)
+    if GetResourceKvpString('fivemai_microphone') == data.deviceId then DeleteResourceKvp('fivemai_microphone') end
+    cb({ok=true})
+end)
 RegisterNUICallback('microphone', function(data, cb)
     if type(data.deviceId) == 'string' and #data.deviceId < 512 then
         SetResourceKvp('fivemai_microphone', data.deviceId)
@@ -259,4 +297,4 @@ RegisterNetEvent('fivemai:jobApply', function(data)
     end)
 end)
 
-print('[fivemai] Commande de parole chargée : N par défaut, personnalisable dans les paramètres FiveM.')
+print('[fivemai] Version npc-capture-2 : commande N chargée, personnalisable dans les paramètres FiveM.')

@@ -235,3 +235,4 @@ exports('RecordNPCEvent',(npcId,description)=>{
 });
 
 console.log('[fivemai] Serveur prêt — résolution des profils v2.');
+console.log(`[fivemai] Version npc-capture-2 chargée depuis ${root}`);

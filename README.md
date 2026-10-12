@@ -126,3 +126,11 @@ Au démarrage, la console serveur doit afficher `[fivemai] Serveur prêt — ré
 ### Touche de parole et chargement de l’interface
 
 La commande maintenue `+fivemai_talk` et sa commande de relâchement `-fivemai_talk` restent associées à N par défaut, avec modification dans les paramètres FiveM. L’ouverture de l’interface est mise en attente si elle n’est pas encore chargée; son accusé de réception empêche une session bloquée après une pression trop tôt au redémarrage. Les PNJ configurés sont repérés directement et restent utilisables sans parcours de la population ambiante. Une pression hors de portée affiche un motif plutôt que rester silencieuse.
+
+### PNJ visible mais non sélectionné, ou ligne F8 vide
+
+La recherche utilise les coordonnées explicites des peds, puis une énumération native si le pool ne contient pas le personnage. Les modèles de démonstration situés près de leur point de spawn retrouvent leur profil configuré. `pnjdiag` dans F8 affiche le nombre de personnages détectés et, pour le plus proche, la distance et les indicateurs joueur/mort/humain. Un personnage joueur n’est jamais traité comme PNJ, même s’il porte un modèle de mécanicien.
+
+Les erreurs de microphone sans message affichent désormais leur type. Si l’identifiant enregistré d’un microphone n’est plus disponible, la NUI signale explicitement le problème, essaie le défaut Windows et efface l’ancien choix seulement si cette capture fonctionne. `pnjmicro` permet ensuite de choisir à nouveau le casque.
+
+Après mise à jour, F8 doit afficher `Version npc-capture-2`. La console txAdmin affiche aussi le chemin de la ressource chargée : vérifier que c’est le checkout où `git pull` a été exécuté si plusieurs dossiers `fivemai` existent.

@@ -5,6 +5,13 @@ class PushToTalk {
     this.ready=false;this.held=false;this.recording=false;this.pending=false;this.generating=false;this.playing=false;this.releaseTimer=null;this.ackTimer=null;
     track.enabled=false;
   }
+  static captureError(error){
+    if(error?.name==='NotAllowedError')return 'Accès microphone refusé par FiveM/Windows.';
+    if(error?.name==='NotReadableError')return 'Microphone inaccessible (NotReadableError) : vérifiez son utilisation par les autres applications.';
+    if(typeof error==='string'&&error.trim())return error;
+    if(typeof error?.message==='string'&&error.message.trim())return error.message;
+    return `Erreur de capture audio : ${error?.name||'cause inconnue'}${error?.constraint ? ' ('+error.constraint+')' : ''}.`;
+  }
   static proximityVolume(distance,full=3,max=18){
     if(!Number.isFinite(distance) || !Number.isFinite(full) || !Number.isFinite(max) || max<=full)return 0;
     if(distance<=full)return 1;
@@ -59,8 +66,8 @@ if(typeof document !== 'undefined') {
 const $=id=>document.getElementById(id);
 let pc,stream,channel,ptt,timer,hideTimer,generation=0,held=false,meterTimer=null,meterBusy=false,turnHealth=null;
 const post=(name,data={})=>fetch(`https://${GetParentResourceName()}/${name}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
-function status(message){$('hud').hidden=false;$('status').textContent=message;}
-function diagnostic(message){void post('diagnostic',{message}).catch(()=>{});}
+function status(message){$('hud').hidden=false;$('status').textContent=typeof message==='string'&&message.trim()?message:'Erreur audio sans détail. Consultez F8.';}
+function diagnostic(message){void post('diagnostic',{message:typeof message==='string'&&message.trim()?message:'Erreur audio sans détail. Consultez F8.'}).catch(()=>{});}
 async function inspectAudio(peer,run){
   if(meterBusy || run!==generation || !ptt?.recording || !peer.getStats)return;
   meterBusy=true;
@@ -111,7 +118,16 @@ async function connect(npc,microphone){
   timer=setTimeout(()=>{if(run===generation)fail('Connexion expirée. Vérifiez le réseau WebRTC et consultez F8.');},30000);
   try{
     if(!navigator.mediaDevices?.getUserMedia)throw new Error('Le microphone WebRTC est indisponible dans cette NUI FiveM.');
-    const media=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,...(microphone ? {deviceId:{exact:microphone}} : {})}});
+    let media;
+    const audio={echoCancellation:true,noiseSuppression:true,autoGainControl:true};
+    try{media=await navigator.mediaDevices.getUserMedia({audio:{...audio,...(microphone ? {deviceId:{exact:microphone}} : {})}});}
+    catch(error){
+      if(!microphone || !['OverconstrainedError','NotFoundError'].includes(error?.name))throw error;
+      if(run!==generation)return;
+      diagnostic('Microphone enregistré indisponible : utilisation du microphone Windows par défaut. Resélectionnez-le avec pnjmicro si nécessaire.');
+      media=await navigator.mediaDevices.getUserMedia({audio});
+      if(run===generation)void post('microphoneFallback',{deviceId:microphone}).catch(()=>{});
+    }
     if(run!==generation){media.getTracks().forEach(t=>t.stop());return;}
     stream=media;const track=stream.getAudioTracks()[0];track.enabled=false;
     diagnostic(`Microphone utilisé : ${track.label || 'périphérique Windows par défaut'}; état=${track.readyState || 'inconnu'}.`);
@@ -142,7 +158,7 @@ async function connect(npc,microphone){
     const offer=await peer.createOffer();if(run!==generation)return;
     await peer.setLocalDescription(offer);if(run!==generation)return;
     await post('offer',{npcId:npc.id,sdp:offer.sdp});
-  }catch(e){if(run===generation)fail(e.name==='NotAllowedError'?'Accès microphone refusé par FiveM/Windows. Consultez F8.':e.message);}
+  }catch(e){if(run===generation)fail(PushToTalk.captureError(e));}
 }
 window.addEventListener('message',async({data})=>{
   if(data.type==='open'){void post('opened',{sessionId:data.sessionId}).catch(()=>{});void connect(data.npc,data.microphone);}
