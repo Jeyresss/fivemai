@@ -1,205 +1,86 @@
-# fivemai — PNJ vocaux, profils persistants et métiers
+# fivemai — ville persistante, PNJ vocaux et services réels
 
-Ressource autonome FiveM. Conversations vocales bidirectionnelles WebRTC avec `gpt-realtime`, sans pipeline de transcription ni synthèse à partir de texte. Les biographies, souvenirs et outils métier sont du contexte textuel; la voix passe directement par OpenAI Realtime.
+Ressource autonome FiveM/OneSync : voix directe OpenAI Realtime par WebRTC, identités et souvenirs SQLite, relations, actions GTA contrôlées, métiers, routines et sept missions écrites. Maintenir **N** pour parler, relâcher pour recevoir la réponse; reprendre la parole interrompt le PNJ. Aucun menu ni curseur de conversation.
 
-## Installation et mise à jour
+Cette version possède du code et du contenu exécutables. Les tests vérifient les moteurs réels, SQLite et des natives GTA simulées. **Elle n'a pas été validée sur FXServer dans cet environnement.** Les fonctions incomplètes et les limites exactes figurent dans [docs/STATUS.md](docs/STATUS.md); le protocole de recette en jeu est dans [docs/VALIDATION.md](docs/VALIDATION.md).
 
-FXServer récent avec Node 22, OneSync, accès OpenAI Realtime et facturation active. Placer le checkout dans `resources/[local]/fivemai`, avec `fxmanifest.lua` directement à la racine, puis :
+## Installation
 
-```bash
+FXServer récent, OneSync, runtime serveur Node 22 avec `node:sqlite` disponible, accès OpenAI Realtime facturé, clients FiveM avec microphone/WebRTC. Le démarrage refuse une base JSON corrompue et un runtime sans SQLite; il ne supprime pas les anciennes données.
+
+Placer la ressource dans `resources/[local]/fivemai`, avec le manifeste à la racine :
+
+```sh
 npm ci --ignore-scripts
 npm test
 npm run check
 ```
 
-Dans une configuration serveur privée, hors Git :
+Dans un fichier de configuration serveur privé, chargé avant la ressource :
 
 ```cfg
 set fivemai_openai_key "VOTRE_CLE_PRIVEE"
-```
-
-Charger cette configuration avant `ensure fivemai` dans `server.cfg`. Utiliser `set`, jamais `setr` ou `sets`. Activer OneSync :
-
-```cfg
 set onesync on
 ensure fivemai
 ```
 
-Le serveur doit pouvoir joindre `api.openai.com` en HTTPS et WebSocket. Les clients doivent disposer de la connectivité WebRTC OpenAI; une règle HTTP seule ne garantit pas le passage de l’audio.
+Utiliser `set` pour la clé. Les secrets restent côté serveur. La NUI reçoit uniquement le SDP de l'appel et un jeton de relais audio, jamais la clé OpenAI. Le fournisseur initial ne prétend à aucun quota gratuit.
 
-Pour mettre à jour, dans le dossier de la ressource : `git pull --ff-only origin main`, puis `npm ci --ignore-scripts`. Dans la console FXServer : `restart fivemai`. Sauvegarder `data/` avant changement de serveur ou redéploiement. Si `config.json` a été personnalisé, conserver ces modifications et résoudre explicitement les éventuels conflits Git.
+`config.json` définit le contenu public et les paramètres par défaut. `config.local.json`, ignoré par Git et exclu des archives, peut remplacer les sections serveur (fusion superficielle); sauvegarder vos personnalisations avant mise à jour. Aucun service auxiliaire n'est requis : SQLite est embarqué dans le runtime serveur. Le mode autonome fournit réellement portefeuilles, inventaires et stocks; il n'est pas branché automatiquement sur une économie ESX/QB.
 
-## Parler et entendre à proximité
+## Ce qui est jouable dans le code livré
 
-Approcher un PNJ humain vivant, maintenir **N** et parler après « Connecté ». Relâcher pour demander sa réponse. Une nouvelle pression peut interrompre le PNJ. Aucun menu ni curseur; seul un indicateur vocal est affiché. La touche se change dans **Paramètres → Assignation des touches → FiveM → Maintenir pour parler au PNJ (IA)**.
+| Personnage | Emplacement | Métier et missions |
+| --- | --- | --- |
+| Marcel Dubois | Garage, `-341.7, -133.5, 39` | Réparation, peinture, améliorations autorisées; pièces du garage et réparation contrôlée |
+| Léa Moreau | Presse, `-537.5, -213, 37.65` | Reconnaissance de trois lieux publics puis escorte à pied |
+| Sami Benali | Station taxi, `903.4, -173.8, 74.1` | Devis et conduite GTA vers des lieux extensibles; mission avec Sami passager |
+| Nora Mercier | Épicerie, `25.7, -1346.8, 29.5` | Vente réelle sur catalogue/stock; livraison d'un panier à Pillbox |
+| Alice Renard | Mission Row, `425.1, -979.5, 30.7` | Intervention sur incident serveur validé, poursuite/menottage/amende; reconnaissance du quartier |
 
-La distance d’interaction est de 4 mètres. La voix est à plein volume jusqu’à `voiceFullDistance` (3 m), baisse progressivement jusqu’à `voiceMaxDistance` (18 m), puis devient inaudible. **S’éloigner ne ferme plus la connexion ni la lecture**. Si le PNJ parle encore quand vous revenez, vous entendez la suite de sa phrase, sans rejouer l’audio manqué. Le microphone est coupé lorsque vous ne maintenez pas la touche et lorsque vous quittez la portée d’interaction.
+Les personnages peuvent se déplacer selon leurs horaires. Leurs positions d'action et la portée vocale utilisent les entités réelles. Les passants éligibles acquièrent des identités séparées et peuvent être suivis par la population persistante. Les profils suivis vivants sont recréés après disparition ou redémarrage à leur dernière position enregistrée; un humain mort ne ressuscite pas par défaut. Une entité existante n'est jamais téléportée pour terminer une action.
 
-La conversation reste individuelle : l’atténuation est calculée pour l’interlocuteur; les autres joueurs ne reçoivent pas encore la voix du PNJ. La session se termine à sa durée maximale (180 s), à la déconnexion, au changement de bucket, à la disparition réelle du PNJ réseau ou à un changement de personnage. Ces limites restent différentes de la portée d’écoute.
+Exemples vocaux : « Répare la voiture AA123BB », puis accepter le devis; « Emmène-moi à l'aéroport », puis accepter et monter à bord; « Montre ton catalogue »; « Tu as une mission pour moi ? ». Le PNJ attend le résultat de son outil avant de confirmer. Les lieux et tarifs proviennent du moteur, les accusations et récompenses ne sont pas inventées par l'IA.
 
-Deux personnages de démonstration restent disponibles : Marcel (-341.7, -133.5, 39.0) et Léa (-537.5, -213.0, 37.65). Mettre `npcs: []` dans la configuration pour ne garder que les passants.
+Les réparations fonctionnent lorsque le joueur est à pied près du véhicule. Plusieurs véhicules imposent un choix par plaque. Les améliorations viennent uniquement de `mechanic.upgrades`; une modification indisponible pour le modèle est refusée. Le taxi réserve le montant puis ne le capture qu'après une arrivée contrôlée : véhicule retenu, PNJ conducteur, joueur à bord, même bucket, arrêt et destination. Une interruption rembourse la réservation.
 
-## Profils des passants
+La police utilise un incident réellement validé par un script serveur ou des dégâts réseau corrélés à une baisse de santé. Une déclaration du joueur ou un souvenir de conversation n'est jamais une preuve pénale. La détention autonome est un menottage temporaire sur place; les systèmes externes de prison/fouille doivent être intégrés explicitement.
 
-Avec `ambientNPCs: true`, la ressource recherche le PNJ humain vivant le plus proche parmi les peds chargés. À la première interaction, le serveur lui attribue prénom, nom, métier, personnalité, voix et biographie procédurale distincte. Les profils sont enregistrés dans `data/profiles.json`. Leur création locale ne nécessite pas un appel OpenAI supplémentaire. La limite `maxProfiles` est de 5 000; au-delà, la création est refusée plutôt que de supprimer silencieusement des personnages.
+## Voix, mémoire et autonomie
 
-Les humains réseau peuvent partager leur identité entre joueurs. Une seule conversation active est autorisée par personnage. Les joueurs et les animaux sont exclus. Les PNJ purement locaux doivent pouvoir être enregistrés en réseau; si FiveM refuse cette opération, la conversation est refusée avec un diagnostic F8. Les scripts qui limitent la population ou le contrôle des entités peuvent nécessiter une intégration.
+La voix suit le circuit **microphone → modèle audio → audio du PNJ**. Le propriétaire garde sa lecture WebRTC directe; son flux distant réel est relayé en PCM aux auditeurs autorisés à proximité. Un seul appel et un interlocuteur principal par PNJ : les autres joueurs entendent la même réponse et reçoivent un refus explicite s'ils demandent la parole tant que l'interlocuteur garde la session. Le relais ajoute une latence à mesurer et dépend du client interlocuteur; son contenu sonore n'est pas une preuve de gameplay.
 
-Un identifiant de ped ou de réseau n’est pas une identité durable après suppression/recréation. Le profil et ses souvenirs restent stockés, mais un nouveau passant reçoit un nouveau profil. Pour vos personnages récurrents, votre script de spawn doit conserver l’ID de profil et le rattacher après recréation, via cet export **serveur** :
+Le volume baisse entre 3 et 18 mètres sans interrompre l'appel. Revenir pendant une phrase permet d'en entendre la suite. Les sons de parole/pain natifs sont suspendus localement pendant la prise en charge; les événements observés remplacent certaines réactions, sans intercepter chaque phrase native. Une nouvelle connexion spontanée a la latence de WebRTC/OpenAI.
 
-```lua
-exports['fivemai']:BindNPCProfile(networkId, profileId)
-local profile = exports['fivemai']:GetNPCProfile(profileId)
+Le choix du micro s'effectue avec `pnjmicro`, `pnjmicro 2` ou `pnjmicro default` dans F8. `pnjdiag` affiche les peds repérés. N peut être remplacé dans les assignations FiveM. L'écoute des voisins n'ouvre pas leur microphone.
+
+La mémoire distingue observations serveur, observations client incertaines, déclarations et rumeurs, avec séparation par licence/PNJ. Les rumeurs proviennent uniquement d'événements explicitement publics et de rencontres physiques; les conversations privées ne circulent pas. Relations et mission réussie modifient durablement refus, tarifs et accès. Les routines proches utilisent un exécuteur GTA unique; loin des joueurs, besoins et horaires progressent sous forme simplifiée, sans session vocale permanente par passant.
+
+## Commandes et intégration
+
+Commandes joueur dans le chat : `/pnjsolde`, `/pnjinventaire`, `/pnjutiliser medicine`, `/pnjutiliser repair_kit`, `/pnjmission`. L'eau et le pain modifient les besoins internes; soins et kit nécessitent une modification native effectivement observée côté serveur. Console administrateur : `pnjbackup` et `pnjstats`.
+
+Les exports `BindNPCProfile`, `RecordEvent`, `RecordIncident`, `RecordPerceivedEvent`, `RecordNPCEvent`, `RegisterJob`, `RegisterVoiceProvider`, `RegisterAdapter` et `RegisterItemEffect` sont des frontières **serveur de confiance**. Les inventaires, récompenses, amendes et stocks ont des exports dédiés. Leur contrat et les exemples se trouvent dans [docs/ADMIN.md](docs/ADMIN.md). Les adaptateurs ESX/QBCore/Qbox prêts à l'emploi ne sont pas fournis; un hook déclaré doit réellement être raccordé au moteur concerné.
+
+Une conversation qui expire conserve une réparation ou un trajet déjà commencé. La mort, la disparition d'entité, le changement de bucket, une interruption de danger ou la déconnexion peuvent arrêter l'activité. Les échecs de contrôle réseau, de navigation, les sièges occupés et les véhicules déplacés remontent un résultat d'échec.
+
+## Mise à jour, sauvegardes et retour arrière
+
+La base inspectée est le commit `2ac8d27b06d6e40c35bf3ef08b7680c8b04d2f35`, conservé sous `backup-before-living-city-2026-10-13`. Une archive du checkout et un bundle Git ont été créés avant modification. Les données privées réelles de votre serveur ne sont pas présentes dans ce workspace : sauvegarder votre `data/` et votre configuration locale avant déploiement.
+
+Au premier démarrage, `profiles.json` et `memory.json` sont copiés en `.before-sqlite-v1.bak`, puis importés atomiquement et une seule fois dans `data/fivemai.sqlite`. Les originaux restent intacts. `pnjbackup` produit un instantané SQLite cohérent. Copier uniquement le fichier `.sqlite` d'un serveur actif ne remplace pas cette procédure WAL.
+
+Pour revenir au code sauvegardé, arrêter la ressource, préserver les données actuelles, puis sélectionner le tag. L'ancienne version lit le JSON et ne sait pas lire les progrès SQLite; revenir également aux JSON sauvegardés perd l'accès aux progrès créés depuis la migration. Le retour arrière n'est donc jamais une conversion automatique silencieuse. Voir [docs/ADMIN.md](docs/ADMIN.md) pour la procédure complète.
+
+## Contrôles et mesures
+
+```sh
+npm test
+npm run check
+npm run benchmark -- --players 128 --peds 200 --profiles 5000 --ticks 100
+npm run package -- --output /CHEMIN_ABSOLU/fivemai-living-city.zip
 ```
 
-Le serveur n’adopte pas une identité simplement déclarée par le client. Avec `demoNetwork: true` (valeur par défaut), les personnages de démonstration sont créés une seule fois par le serveur, dans le bucket principal. Les clients utilisent les mêmes entités réseau; leurs positions réelles restent utilisables pendant les actions et trajets. Les autres scripts doivent éviter de supprimer ces entités.
+Le paquet source exclut données, secrets, dépendances installées et fichiers temporaires. Réinstaller les dépendances à destination. Les mesures Node/SQLite reproductibles sont publiées dans [docs/benchmarks/node-sqlite-2026-10-13.json](docs/benchmarks/node-sqlite-2026-10-13.json); elles n'établissent pas une capacité mesurée de 128 joueurs sur FXServer.
 
-## Voix, sexe et langage
-
-Le client détecte le sexe du ped avec `IsPedMale`; les modèles connus des personnages configurés fournissent aussi cette indication. À sa création, un profil choisit une voix dans `voices.male`, `voices.female` ou `voices.unknown`, puis la conserve. Les listes peuvent être modifiées dans `config.json`; une voix explicite sur un personnage configuré reste prioritaire. La voix se choisit avant le premier audio et ne change pas pendant une session. Les émotions sont exprimées par les instructions Realtime, avec la même voix.
-
-`archetypes` associe les modèles GTA à un registre et un tempérament : gang (argot, territorial, méfiant), police (professionnel, ferme), garage (pratique, familier), bureau (soigné), chauffeur ou passant. Le langage ne dépend pas d’une origine ethnique; le sexe ne détermine pas le courage. Le profil individuel et ses souvenirs nuancent le registre. Les modèles personnalisés peuvent être ajoutés aux listes `models`. Le métier fonctionnel se choisit dans `jobs` indépendamment de ce registre.
-
-Les profils existants reçoivent ces nouveaux champs à leur prochaine résolution, sans changer leur identifiant, nom, histoire ni souvenirs. Leur voix est adaptée une fois au sexe détecté, puis persistée. Avant toute utilisation des données par cette version, le serveur copie les JSON existants vers `data/profiles.json.before-npc-actions-v1.bak` et `data/memory.json.before-npc-actions-v1.bak`, sans écraser une sauvegarde déjà présente.
-
-## Braquage et actions vocales
-
-Braquer un PNJ à proximité, maintenir N et dire **« Lève les mains »**. Le modèle appelle `npc_action`; le serveur vérifie la session, la proximité, la menace récente et le tempérament. Le client vérifie à nouveau l’arme pointée, prend le contrôle du ped et joue la reddition. Une réponse positive n’est fournie au modèle qu’après confirmation de l’animation. Le braquage seul peut déclencher une protestation, mais ne lance pas automatiquement une action via le modèle.
-
-La posture dure au maximum `actions.surrenderSeconds` (30 s) et se termine après `releaseAfterThreatSeconds` (8 s) sans arme pointée, à la mort, à une interruption réelle, au départ du joueur ou à la fermeture de session. Les personnages armés refusent par défaut (`allowArmedSurrender: false`). Si cette option est activée, le seuil de reddition du tempérament reste appliqué. Un PNJ désarmé peut être amené à arrêter sa fuite pour se rendre; une tâche de conversation ordinaire n’arrête toujours pas une fuite.
-
-Actions disponibles pour tous les métiers lorsque `actions.enabled` vaut `true` :
-
-| Demande vocale | Action réelle |
-| --- | --- |
-| « Lève les mains » | Reddition sous menace, avec vérification de l’animation |
-| « Tu peux baisser les mains », « Arrête de me suivre » | Libération de l’action gérée par la ressource |
-| « Suis-moi », « Accompagne-moi » | Suivi du joueur, jusqu’à 60 s par défaut |
-| « Va-t’en », « Fuis » | Fuite, sans remplacer un combat en cours |
-| « Va près de cette voiture » | Déplacement jusqu’au côté du véhicule |
-| « Monte dans la voiture » | Montée sur un siège passager libre, vérifiée en jeu |
-
-Avec plusieurs véhicules proches, l’IA demande la plaque. Un véhicule en mouvement ou un siège occupé est refusé; aucun occupant n’est expulsé. Les actions sont exclusives et ne se superposent pas à une intervention du mécanicien. L’expiration, le contrôle réseau refusé et les erreurs natives produisent un échec, jamais une réussite inventée. Le suivi et la fuite sont annoncés comme commencés, sans prétendre avoir déjà atteint un objectif.
-
-## Réactions spontanées et paroles natives
-
-`reactions.enabled: true` active une réaction courte à une arme pointée, une agression, une fuite ou un affrontement observé. À moins de `reactions.radius` (4 m), une réaction peut ouvrir une session sans N. Le microphone WebRTC est préparé mais sa piste reste désactivée jusqu’à la pression de la touche. Dans une session existante, les réactions utilisent le même profil et la même connexion. Le joueur garde la priorité; une réaction en attente est abandonnée lorsqu’il commence à parler. Une réaction spontanée n’a pas le droit d’appeler les outils de gameplay.
-
-Les paroles ambiantes et sons de douleur natifs du PNJ pris en charge sont désactivés localement pendant cette session, puis réactivés à sa fermeture. Le remplacement repose sur les événements et états du jeu : il ne récupère pas chaque phrase native ni ne garantit un cri au même instant. Une nouvelle connexion a une latence WebRTC/OpenAI; une connexion déjà ouverte réagit plus vite. La voix IA reste audible seulement pour l’interlocuteur, avec l’atténuation de proximité existante.
-
-Une seule session par joueur et par PNJ, huit sessions simultanées par serveur, au moins 8 s entre réactions et 15 s entre ouvertures automatiques par joueur. Une session automatique sans activité se ferme après 30 s; appuyer sur N la transforme en conversation normale. Ces paramètres se règlent dans `reactions`; les sessions automatiques utilisent aussi l’API payante.
-
-## Métier de chauffeur
-
-Le métier `driver` reçoit `driver_trip`. Les modèles `s_m_m_gentransport` et `s_m_m_trucker_01` sont associés à ce métier; il est également possible de l’assigner via `AssignNPCJob`. Demander **« Emmène-moi au garage »**, **« au commissariat »** ou **« à l’hôpital »**. Les destinations autorisées et leurs coordonnées sont définies dans `destinations`.
-
-Le chauffeur choisit le seul véhicule proche, ou demande la plaque s’il y en a plusieurs. Il doit être garé et son siège conducteur libre. Le PNJ monte, attend jusqu’à huit secondes que le joueur soit à bord, puis démarre un trajet GTA normal. Le résultat confirme le départ, pas l’arrivée. Le trajet s’arrête si le joueur descend, si une menace interrompt l’action, à la durée maximale `actions.maxTripSeconds` (150 s) ou à la fermeture de session. La navigation dépend des routes, du véhicule et des obstacles du jeu; les voyages sont gratuits dans ce prototype sans économie.
-
-## Mémoire et perception
-
-`data/memory.json` conserve les faits sélectionnés par le modèle, séparés par licence FiveM et personnage : 100 entrées récentes par paire. Chaque session reçoit jusqu’à 20 souvenirs relationnels et 10 observations publiques du PNJ. Les outils sont traités sur une connexion OpenAI sideband authentifiée côté serveur. Ce n’est pas un enregistrement exhaustif des conversations.
-
-Vos scripts serveur doivent transmettre les événements qu’un PNJ a réellement vus ou entendus. Ils déterminent les témoins, la visibilité, les obstacles et les rumeurs; cette ressource ne détecte pas automatiquement tous les vols.
-
-```lua
--- Mémoire du PNJ concernant ce joueur précis.
-exports['fivemai']:RecordEvent(playerSource, {
-    description = 'Marcel a vu ce joueur voler une voiture rouge devant son garage.',
-    witnesses = { 'marcel_dubois' }
-})
-
--- Observation publique propre au PNJ, accessible dans ses futures conversations.
-exports['fivemai']:RecordNPCEvent('marcel_dubois', 'Une voiture rouge a été volée devant le garage.')
-```
-
-Ne jamais relayer directement une description arbitraire du client vers ces exports. Qualifier une information entendue de rumeur, sans la transformer en observation certaine. Les émotions sont guidées par la personnalité et les souvenirs; leur cohérence parfaite ne peut pas être garantie.
-
-## Attitude pendant la conversation
-
-L’état réel du personnage est observé dans GTA pendant la session. Un PNJ calme à portée s’arrête, se tourne vers le joueur et le regarde. Lorsqu’il n’est plus sollicité ou que le joueur quitte la portée d’interaction, un passant reprend sa marche; les PNJ de démonstration restent disponibles. La conversation ne fige pas physiquement le personnage.
-
-La fuite et le combat sont prioritaires : aucun arrêt, rotation ou tâche de conversation ne remplace leur action en cours. Un PNJ effrayé conserve sa fuite, avec des instructions vocales de peur, tension et essoufflement. Un PNJ qui combat le joueur reçoit des instructions de colère et de propos agressifs. Un combat avec quelqu’un d’autre est distingué afin de ne pas attribuer arbitrairement une attaque au joueur. Les changements de ton sont transmis à la même session Realtime, en conservant la voix, le profil et les souvenirs.
-
-Les coups reçus, la visée d’une arme et le ciblage au corps-à-corps sont observés également avant le début d’une conversation. Ces indices sont conservés pendant 20 secondes, et prolongés tant que la fuite observée continue. Une fuite après une menace ou une agression du joueur transmet au modèle que cet interlocuteur est son agresseur : le PNJ lui répond directement avec peur et méfiance. Une fuite sans indice reliant le joueur à sa peur ne l’accuse pas automatiquement. Le ciblage au corps-à-corps prépare un discours de colère avant même les premiers coups. Le contexte distingue une arme pointée, une agression constatée et un affrontement imminent, sans inventer des blessures ou des coups non observés.
-
-Si le personnage devient effrayé ou agressif pendant une réponse calme, cette réponse peut être interrompue pour reprendre avec le nouvel état, après confirmation de mise à jour Realtime. Pendant la prise de parole du joueur, le changement prépare la réponse suivante. Les transitions de retour au calme sont temporisées pour éviter de stopper une fuite sur un changement d’état très bref. Le rendu exact de la peur et de la colère dépend du modèle vocal et reste à vérifier en jeu.
-
-Les tâches d’un métier ne sont pas interrompues par la posture de conversation calme. En revanche, une fuite ou un combat annule un service en cours; le nettoyage du service ne remplace pas les tâches de fuite ou de combat. Les observations de comportement viennent du client FiveM et servent à la conversation et à l’interruption du service, pas à établir une preuve d’infraction.
-
-## Premier métier : mécanicien
-
-Le métier `mechanic` expose deux outils Realtime : établir un devis, puis effectuer un service après accord oral explicite. Marcel est mécanicien; les modèles de mécaniciens listés dans `jobs[].models` reçoivent également ce métier. Les autres passants reçoivent un métier de la liste. Un métier narratif sans outils ne peut pas encore agir.
-
-Services disponibles : réparation et peinture (rouge, bleu, noir, blanc, vert, jaune, orange, violet). **Ils sont gratuits dans ce prototype**, sans portefeuille, retrait d’argent ni intégration économique.
-
-Pour tester : garer votre voiture près de Marcel, sortir et dire « Peux-tu réparer ma voiture ? ». Le joueur n’a plus besoin d’occuper le véhicule. Le serveur recherche les véhicules réseau dans le même bucket, à moins de 10 m du mécanicien et de 12 m du joueur. Avec un seul véhicule, sa plaque est retenue automatiquement. Avec plusieurs véhicules, l’outil renvoie les plaques et le PNJ demande laquelle choisir : répondre par exemple « La plaque est AA123BB ». Les espaces, tirets et différences de casse sont ignorés; les plaques inconnues ou identiques sur plusieurs voitures sont refusées.
-
-Après accord sur le devis, le véhicule reste fixé à son identifiant réseau, son entité, son modèle et sa plaque : une voiture qui devient plus proche ne peut pas le remplacer. Le mécanicien rejoint un point devant le capot, obtenu à partir des dimensions et de l’orientation de la voiture, se tourne vers elle, ouvre le capot, puis lance l’animation de réparation. L’intervention commence seulement après son arrivée; le serveur attend quatre secondes et revalide le véhicule avant d’autoriser les natives côté client. À la fin, le capot est refermé s’il avait été ouvert par le service, et les PNJ de démonstration retournent à leur point de départ.
-
-Le client doit obtenir le contrôle réseau du PNJ et du véhicule. Un trajet impossible, un contrôle refusé ou un déplacement de la voiture interrompt le service. Le capot est ouvert lorsque le modèle le permet; un capot absent, détruit ou non animé ne bloque plus la réparation. Le joueur reste à proximité et peut être à pied pendant toute l’intervention. Les services sont gratuits et n’intègrent pas encore les clés, la propriété des véhicules ni une économie. La confirmation vocale est interprétée par le modèle. Le résultat natif est confirmé par le client; il ne doit pas déclencher de récompense ni de paiement sans vérification supplémentaire.
-
-Les PNJ fixes utilisent `jobId` dans `config.json`. Un script serveur peut attribuer un métier à un profil ambiant inactif :
-
-```lua
-exports['fivemai']:AssignNPCJob(profileId, 'mechanic')
-```
-
-Les métiers sont définis dans `server/jobs.js` via `JobRegistry`. Un script serveur JavaScript peut appeler `RegisterJob` avec `{id, label, tools, execute}` : `tools` contient les schémas Realtime; `execute(name, context, args)` réalise des validations serveur et retourne un résultat, éventuellement asynchrone. Les fonctions viennent de scripts serveur de confiance, jamais de code fourni par l’IA. Prévoir un identifiant et un libellé dans la configuration pour la génération automatique de ce métier.
-
-## Microphone Windows
-
-La NUI utilise un périphérique Windows qui peut différer du micro du chat vocal GTA. Dans **F8**, sans menu :
-
-- `pnjmicro` liste les entrées audio.
-- `pnjmicro 2` sélectionne la deuxième entrée de cette liste et ferme la session courante pour appliquer le choix à la prochaine connexion.
-- `pnjmicro default` restaure le défaut Windows.
-
-Relâcher puis maintenir la touche pour reconnecter. Le choix est conservé localement. Vérifier le signal dans **Windows → Système → Son → Entrée** et les autorisations microphone des applications de bureau.
-
-L’indicateur affiche le niveau lorsque Chromium expose cette statistique. F8 indique le microphone, le niveau maximum et les octets audio envoyés. Des paquets audio peuvent contenir du silence; un niveau indisponible ne signifie pas un niveau nul. Les erreurs de microphone, de lecture et d’OpenAI sont également affichées.
-
-## Vérifications et limites
-
-Les tests cloud exécutent le Lua client avec des natives simulées et le serveur avec un transport Realtime simulé. Ils vérifient les profils et leur migration, la reddition, les sièges occupés, les trajets, les réactions et leurs limites, ainsi que la logique de prise de parole, l’atténuation/reprise du volume, la persistance des profils, l’isolation des mémoires et les validations des métiers. Les nouvelles fonctions ne sont pas validées sur un FXServer dans le cloud. Le fonctionnement vocal de la version précédente a été confirmé par l’utilisateur sur son serveur.
-
-Tests en jeu à réaliser après mise à jour :
-
-1. Pendant une longue réponse, s’éloigner au-delà de 18 m et revenir avant la fin : entendre la suite sans nouvelle connexion.
-2. Rencontrer deux passants : identités distinctes; retrouver le même ped : profil et souvenir conservés. Avec un second joueur, vérifier la même identité et le refus si le PNJ est occupé.
-3. Vérifier que disparition/recréation d’un passant ne réutilise pas l’identité par accident; tester `BindNPCProfile` pour un personnage récurrent.
-4. À pied près de Marcel et de la voiture garée : demander une réparation et une peinture, accepter le devis, vérifier les changements réels. Tester aussi choix par plaque avec plusieurs véhicules, ouverture du capot, refus et départ pendant l’intervention et absence de réussite annoncée après échec.
-5. Menacer un passant avec une arme, la baisser puis lui parler pendant sa fuite : vérifier qu’il identifie le joueur comme la menace. Tester aussi le ciblage à mains nues avant les coups, une agression et une fuite causée par un autre personnage. Vérifier que la conversation ne stoppe ni la fuite ni le combat.
-6. Rencontrer un ped féminin et un ped masculin, puis un membre de gang et un policier : vérifier la voix, le langage, leur stabilité après reconnexion et la conservation des anciens souvenirs.
-7. Braquer un passant désarmé et demander de lever les mains. Vérifier l’animation, sa tenue pendant la conversation, l’arrêt après baisse de l’arme et le refus d’un personnage armé. Tester aussi une animation interrompue et le contrôle réseau refusé.
-8. Sans appuyer sur N, braquer ou agresser un passant à moins de 4 m : réaction courte, micro désactivé, absence de paroles natives doublées et absence de répétitions continues. Maintenir N pendant sa réaction pour l’interrompre et lui parler.
-9. Demander de suivre, fuir, rejoindre une voiture et monter comme passager. Tester plusieurs plaques et tous les sièges occupés. Avec un chauffeur, demander une destination autorisée, monter à bord et vérifier la conduite réelle; essayer une destination inconnue et un siège conducteur occupé.
-10. Avec deux clients, vérifier que les personnages de démonstration ne sont pas dupliqués, que le même PNJ reste exclusif à un interlocuteur et que la fermeture d’une conversation ne supprime pas le ped partagé.
-11. Vérifier microphone, erreurs réseau, déconnexion, changement de bucket, durée limite et arrêt de ressource.
-
-Le JSON convient à un prototype mono-instance. Sauvegarder `data/`, limiter les droits d’accès et définir une politique de conservation; les fichiers ne sont pas chiffrés. Le serveur limite les sessions simultanées à huit et les ouvertures à une toutes les dix secondes par joueur. Les processus Realtime sont à redémarrer après un redéploiement; les données conservées ne sauvegardent pas les appels actifs.
-
-### Profil qui ne se résout pas
-
-Les PNJ fixes démarrent directement à partir de leur profil configuré; leur appel reste autorisé côté serveur. Les passants utilisent une demande de profil numérotée et attendent un retour explicite. Un PNJ pas encore visible sur le serveur donne lieu à trois tentatives au maximum. Une erreur permanente est affichée dans F8 et détaillée par étape dans txAdmin; les erreurs vides ou les refus dus à la fréquence des demandes ne restent plus silencieux.
-
-Au démarrage, la console serveur doit afficher `[fivemai] Serveur prêt — résolution des profils v2.`. Si F8 indique que le serveur ne répond pas, vérifier d’abord les erreurs de chargement serveur et la mise à jour complète de la ressource, plutôt que modifier le microphone ou la clé OpenAI.
-
-### Touche de parole et chargement de l’interface
-
-La commande maintenue `+fivemai_talk` et sa commande de relâchement `-fivemai_talk` restent associées à N par défaut, avec modification dans les paramètres FiveM. L’ouverture de l’interface est mise en attente si elle n’est pas encore chargée; son accusé de réception empêche une session bloquée après une pression trop tôt au redémarrage. Les PNJ configurés sont repérés directement et restent utilisables sans parcours de la population ambiante. Une pression hors de portée affiche un motif plutôt que rester silencieuse.
-
-### PNJ visible mais non sélectionné, ou ligne F8 vide
-
-La recherche utilise les coordonnées explicites des peds, puis une énumération native si le pool ne contient pas le personnage. Les modèles de démonstration situés près de leur point de spawn retrouvent leur profil configuré. `pnjdiag` dans F8 affiche le nombre de personnages détectés et, pour le plus proche, la distance et les indicateurs joueur/mort/humain. Un personnage joueur n’est jamais traité comme PNJ, même s’il porte un modèle de mécanicien.
-
-Les erreurs de microphone sans message affichent désormais leur type. Si l’identifiant enregistré d’un microphone n’est plus disponible, la NUI signale explicitement le problème, essaie le défaut Windows et efface l’ancien choix seulement si cette capture fonctionne. `pnjmicro` permet ensuite de choisir à nouveau le casque.
-
-Après mise à jour, F8 doit afficher `Version npc-actions-1`. La console txAdmin affiche aussi le chemin de la ressource chargée : vérifier que c’est le checkout où `git pull` a été exécuté si plusieurs dossiers `fivemai` existent.
-
-L’arrivée devant le capot est vérifiée au sol, avec une tolérance de hauteur pour la position du corps du PNJ. F8 affiche les étapes « arrivé devant le capot », « capot ouvert », « animation lancée » et « intervention appliquée », ou la cause du refus. Une erreur native pendant la préparation est transmise au serveur au lieu de laisser la tâche bloquée.
-
-Les fonctions de comportement sont intégrées localement à `client/main.lua`; aucun chargement préalable de module global n’est nécessaire. La portée de début de conversation par défaut est de 4 m (`interactionDistance`), distincte de la portée d’écoute de 18 m.
-
-## Sauvegarde du code avant cette mise à jour
-
-La version précédente (`2fbd8f6`) est conservée dans le tag GitHub `backup-before-npc-actions-2026-10-12`. Pour inspecter cette version sans modifier le serveur : `git show backup-before-npc-actions-2026-10-12:config.json`. Le tag conserve le code suivi par Git; les données privées du serveur sont sauvegardées séparément dans `data/` comme indiqué plus haut. Pour revenir au code précédent, arrêter la ressource et effectuer `git switch --detach backup-before-npc-actions-2026-10-12`, puis redémarrer. Pour revenir à la version actuelle : `git switch main` (si votre branche de déploiement est `main`). Ne restaurer les fichiers `.bak` que ressource arrêtée, en conservant aussi les données créées depuis la mise à jour.
+Pour l'audit initial et la séparation des modules : [AUDIT](docs/AUDIT.md), [ARCHITECTURE](docs/ARCHITECTURE.md), [ADMIN](docs/ADMIN.md), [VALIDATION](docs/VALIDATION.md), [STATUS](docs/STATUS.md).

@@ -1,15 +1,20 @@
 {
   "name": "fivemai",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "private": true,
   "scripts": {
     "test": "node --test tests/*.test.js",
-    "check": "node --check server/index.js && node --check server/core.js && node --check server/profiles.js && node --check server/jobs.js && node --check web/app.js && node --check server/archetypes.js && node --check server/actions.js && node --check server/reactions.js"
+    "check": "node scripts/check.js",
+    "benchmark": "node scripts/benchmark.js",
+    "package": "node scripts/package.js"
   },
   "dependencies": {
     "ws": "8.18.3"
   },
   "devDependencies": {
     "fengari": "^0.1.5"
+  },
+  "engines": {
+    "node": ">=22.13.0"
   }
 }

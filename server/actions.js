@@ -1,5 +1,5 @@
 const crypto=require('node:crypto');
-const ACTIONS=['hands_up','release','follow','flee','approach_vehicle','enter_vehicle'];
+const ACTIONS=['hands_up','release','follow','flee','approach_vehicle','enter_vehicle','exit_vehicle','wait','go_to'];
 const REASONS={control:'Contrôle réseau du PNJ indisponible',danger:'Le PNJ ne peut pas effectuer cette action dans son état actuel',weapon:'Le joueur ne braque plus le PNJ',refused:'Ce personnage refuse de se rendre dans cette situation',vehicle:'Véhicule inaccessible ou siège occupé',path:'Destination non atteinte',animation:'Animation de reddition non confirmée',gone:'Personnage disparu',script:'Erreur client; consulter F8',expired:'Action expirée',distance:'Joueur trop éloigné',released:'Menace levée',interrupted:'Action interrompue'};
 class NPCActionManager {
  constructor({config={},inspect,send,changed=()=>{},remember=()=>{},now=()=>Date.now(),schedule=setTimeout,cancelTimer=clearTimeout}){
@@ -7,7 +7,7 @@ class NPCActionManager {
  }
  tools(jobId){
   if(this.config.enabled===false)return [];
-  const tools=[{type:'function',name:'npc_action',description:'Exécuter une action réelle de ce PNJ à la demande vocale du joueur: lever les mains sous la menace, libérer la posture, suivre, fuir, rejoindre un véhicule ou monter comme passager. Ne jamais annoncer que l’action a eu lieu avant son résultat. La reddition peut être refusée selon le tempérament et la situation.',parameters:{type:'object',properties:{action:{type:'string',enum:ACTIONS},plate:{type:'string',description:'Plaque du véhicule si plusieurs véhicules sont proches'}},required:['action'],additionalProperties:false}}];
+ const tools=[{type:'function',name:'npc_action',description:'Exécuter une action réelle: reddition, suivi, fuite, attente, destination configurée, entrée ou sortie du véhicule. Attendre le résultat avant de confirmer. Aucun lieu arbitraire.',parameters:{type:'object',properties:{action:{type:'string',enum:ACTIONS},destination:{type:'string',description:'Identifiant d’un lieu configuré pour go_to'},plate:{type:'string',description:'Plaque du véhicule si plusieurs véhicules sont proches'}},required:['action'],additionalProperties:false}}];
   if(jobId==='driver')tools.push({type:'function',name:'driver_trip',description:'Après une demande explicite, conduire un véhicule garé avec siège conducteur libre vers une destination autorisée. Demander la destination au joueur; ne pas inventer de destination. Service gratuit sans économie.',parameters:{type:'object',properties:{destination:{type:'string'},plate:{type:'string'}},required:['destination'],additionalProperties:false}});
   return tools;
  }
@@ -40,6 +40,11 @@ class NPCActionManager {
   }else if(!['calm','surrendered'].includes(ctx.session.behavior||'calm')&&action!=='flee'){
    throw new Error('Le PNJ a peur ou se bat et refuse cette action');
   }
+  return this.startTrusted(ctx,action,observed);
+ }
+ // Only trusted server jobs and mission executors call this boundary.
+ startTrusted(ctx,action,observed={}){
+  if([...this.pending.values()].some(p=>p.ctx.session===ctx.session)||this.running.has(ctx.session))throw new Error('Une action est déjà en cours');
   this.stop(ctx.session,'interrupted');
   return new Promise(resolve=>{
    const token=crypto.randomUUID();
@@ -56,7 +61,7 @@ class NPCActionManager {
   const {ctx,action}=pending;
   this.running.set(ctx.session,{token,src,action,ctx,observed:pending.observed});ctx.session.actionState=action;this.changed(ctx.session);
   let memorySaved=true;try{this.remember(ctx,`Action du PNJ confirmée: ${action}.`);}catch{memorySaved=false;}
-  pending.resolve({ok:true,memorySaved,completed:!['follow','drive','flee'].includes(action),started:true,action,...(action==='drive'?{destination:pending.observed.destination.label,instruction:'Le trajet a commencé; ne prétends pas être déjà arrivé.'}:{})});return true;
+  pending.resolve({ok:true,memorySaved,completed:!['follow','drive','flee','wait'].includes(action),started:true,action,...(action==='drive'?{destination:pending.observed.destination.label,instruction:'Le trajet a commencé; ne prétends pas être déjà arrivé.'}:{})});return true;
  }
  ended(src,token,reason){
   for(const [session,action] of this.running){if(action.token!==token||action.src!==src)continue;

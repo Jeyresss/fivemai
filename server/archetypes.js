@@ -8,24 +8,30 @@ const DEFAULT_ARCHETYPES=[
  {id:'resident',label:'Passant',models:[],register:'Français courant, spontané, selon ta personnalité et tes souvenirs.',temperament:'prudent',surrenderThreshold:0.3}
 ];
 const VOICES={male:['cedar','ash','echo'],female:['marin','coral','shimmer'],unknown:['marin','cedar']};
-function sexForModel(model,hint='unknown'){
+const COMMON_MODELS=['a_f_m_beach_01','a_f_y_beach_01','a_f_y_beach_02','a_f_m_fatwhite_01','a_f_m_fatbla_01','a_f_m_skidrow_01','a_f_m_soucent_01','a_f_m_soucent_02','a_f_y_hipster_01','a_f_y_hipster_02','a_f_y_hipster_03','a_f_y_hipster_04','a_f_y_tourist_01','a_f_y_tourist_02','a_f_y_vinewood_01','a_f_y_vinewood_02','a_f_y_vinewood_03','a_f_y_vinewood_04','a_f_y_hiker_01','a_f_y_runner_01','a_f_y_scdressy_01','a_f_y_yoga_01','a_f_y_soucent_01','a_f_y_soucent_02','a_f_y_soucent_03','a_m_y_hipster_01','a_m_y_hipster_02','a_m_y_hipster_03','a_m_y_beach_01','a_m_y_beach_02','a_m_y_beach_03','a_m_y_runner_01','a_m_y_runner_02','a_m_y_hiker_01','a_m_m_farmer_01','s_f_y_scrubs_01','s_f_y_shop_mid','s_f_y_shop_low','s_f_m_shop_high','s_m_y_garbage','s_m_m_postal_01','s_m_m_postal_02'];
+const KNOWN_SEX=new Map([...DEFAULT_ARCHETYPES.flatMap(archetype=>archetype.models),...COMMON_MODELS].map(name=>[modelHash(name),/^(?:a|s|g|mp)_f_/.test(name)?'female':'male']));
+function sexForModel(model,hint='unknown',overrides={}){
+ const hash=typeof model==='string'?modelHash(model):model>>>0;
+ const override=overrides?.[String(model)]??overrides?.[String(hash)]??overrides?.[String(hash|0)]??Object.entries(overrides||{}).find(([key])=>!/^[-+]?\d+$/.test(key)&&modelHash(key)===hash)?.[1];
+ if(['male','female','unknown'].includes(override))return override;
  // Sex is an appearance hint only; it never authorizes a gameplay action.
  if(typeof model==='string'){
   if(/^(?:a|s|g|mp)_f_/.test(model))return 'female';
   if(/^(?:a|s|g|mp)_m_/.test(model))return 'male';
  }
+ if(KNOWN_SEX.has(hash))return KNOWN_SEX.get(hash);
  return ['male','female'].includes(hint)?hint:'unknown';
 }
 function archetypeFor(model,definitions=DEFAULT_ARCHETYPES){
  const hash=typeof model==='string'?modelHash(model):model>>>0;
  return definitions.find(a=>a.models?.some(name=>modelHash(name)===hash))||definitions.find(a=>a.id==='resident')||DEFAULT_ARCHETYPES.at(-1);
 }
-function appearance(model,sex,definitions=DEFAULT_ARCHETYPES,voices=VOICES){
- const archetype=archetypeFor(model,definitions),inferred=sexForModel(model,sex);
- return {sex:inferred,archetypeId:archetype.id,language:archetype.register,temperament:archetype.temperament,surrenderThreshold:archetype.surrenderThreshold??0.3,voiceChoices:voices[inferred]||VOICES[inferred]};
+function appearance(model,sex,definitions=DEFAULT_ARCHETYPES,voices=VOICES,sexOverrides={}){
+ const archetype=archetypeFor(model,definitions),inferred=sexForModel(model,sex,sexOverrides);
+ return {sex:inferred,archetypeId:archetype.id,language:archetype.register,temperament:archetype.temperament,surrenderThreshold:archetype.surrenderThreshold??0.3,voiceChoices:Array.isArray(voices?.[inferred])&&voices[inferred].length?voices[inferred]:VOICES[inferred]};
 }
 function enrichFixed(npc,config,hint){
- const traits=appearance(npc.model,['male','female'].includes(npc.sex)?npc.sex:hint,config.archetypes,config.voices);
+ const traits=appearance(npc.model,['male','female'].includes(npc.sex)?npc.sex:hint,config.archetypes,config.voices,config.sexOverrides);
  const {voiceChoices,...fields}=traits;
  return {...fields,...npc,sex:traits.sex,voice:npc.voice||voiceChoices[0]};
 }
