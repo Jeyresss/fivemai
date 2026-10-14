@@ -37,3 +37,31 @@ test('custom ped archetype maps by signed hash and custom voices are used',()=>{
 test('a custom model with unknown configured sex accepts the actual native sex hint',()=>{
  const {enrichFixed}=require('../server/archetypes');const male=enrichFixed({model:'custom_character',sex:'unknown'}, {}, 'male');assert.equal(male.sex,'male');assert.equal(male.voice,'cedar');const female=enrichFixed({model:'custom_character'}, {}, 'female');assert.equal(female.sex,'female');assert.equal(female.voice,'marin');
 });
+
+test('fixed SQLite NPC identities preserve customized biography and voice across restart',()=>{
+ const {PersistentDatabase}=require('../server/database'),dir=fs.mkdtempSync(path.join(os.tmpdir(),'fivemai-fixed-sqlite-'));let db;
+ try{
+  const file=path.join(dir,'city.sqlite');db=new PersistentDatabase(file);let profiles=new ProfileStore(null,{db});
+  const fixed={id:'marcel',model:'s_m_y_xmech_01',firstName:'Marcel',lastName:'Dubois',story:'Origine initiale',voice:'cedar',jobId:'mechanic',job:'Mécanicien'};
+  profiles.upsertFixed(fixed);const customized=profiles.get('marcel');customized.firstName='Marc';customized.story='Histoire éditée par un administrateur';customized.voice='echo';db.set('profiles','marcel',customized);db.close();
+  db=new PersistentDatabase(file);profiles=new ProfileStore(null,{db});const restored=profiles.upsertFixed({...fixed,firstName:'Remplacé',story:'Nouvelle configuration',voice:'ash'});assert.equal(restored.firstName,'Marc');assert.equal(restored.story,'Histoire éditée par un administrateur');assert.equal(restored.voice,'echo');assert.equal(restored.id,'marcel');assert.equal(profiles.get('marcel').fixed,true);
+ }finally{db?.close();fs.rmSync(dir,{recursive:true});}
+});
+test('female numeric models and custom sex overrides choose coherent persisted voices',()=>{
+ const {modelHash}=require('../server/core'),{sexForModel}=require('../server/archetypes');
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'fivemai-sex-'));
+ try{
+  assert.equal(sexForModel(modelHash('a_f_y_hipster_01'),'male'),'female');
+  const store=new ProfileStore(path.join(dir,'profiles.json'),{sexOverrides:{custom_ped:'female'}});const custom=store.create(modelHash('custom_ped'),'resident','male');assert.equal(custom.sex,'female');assert.ok(['marin','coral','shimmer'].includes(custom.voice));assert.equal(new ProfileStore(store.file).get(custom.id).voice,custom.voice);
+  const official=store.create(modelHash('s_f_y_cop_01')|0,undefined,'male');assert.equal(official.sex,'female');assert.equal(official.archetypeId,'police');
+ }finally{fs.rmSync(dir,{recursive:true});}
+});
+test('profile JSON keys cannot access Object prototype properties',()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'fivemai-prototype-'));
+ try{const store=new ProfileStore(path.join(dir,'profiles.json'));assert.equal(store.get('__proto__'),null);assert.equal(store.get('constructor'),null);assert.throws(()=>store.upsertFixed({id:'bad\nkey'}),/Invalid NPC/);}finally{fs.rmSync(dir,{recursive:true});}
+});
+
+test('multiple stores share the persistent profile cap',()=>{
+ const {PersistentDatabase}=require('../server/database'),dir=fs.mkdtempSync(path.join(os.tmpdir(),'fivemai-shared-cap-'));let db;
+ try{db=new PersistentDatabase(path.join(dir,'city.sqlite'));const first=new ProfileStore(null,{db,maxProfiles:1}),second=new ProfileStore(null,{db,maxProfiles:1});first.create('s_m_y_xmech_01');assert.throws(()=>second.create('s_m_y_xmech_01'),/Limite/);}finally{db?.close();fs.rmSync(dir,{recursive:true});}
+});

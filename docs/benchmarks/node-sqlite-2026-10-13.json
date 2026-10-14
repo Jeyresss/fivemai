@@ -1,0 +1,119 @@
+{
+  "kind": "node-sqlite-synthetic-workload",
+  "generatedAt": "2026-10-13T12:08:01.885Z",
+  "environment": {
+    "node": "v24.19.0",
+    "platform": "linux",
+    "architecture": "x64",
+    "cpuModel": "INTEL(R) XEON(R) PLATINUM 8573C",
+    "logicalCpuCount": 3,
+    "quotaUnknown": true
+  },
+  "workload": {
+    "players": 128,
+    "activePeds": 200,
+    "profiles": 5000,
+    "ticks": 100,
+    "output": "/workspace/fivemai/work/benchmark.json"
+  },
+  "measurements": {
+    "databaseOpen": {
+      "wallMs": 2.3280579999999986,
+      "cpuMs": 2.307
+    },
+    "profileSeed": {
+      "wallMs": 235.307047,
+      "cpuMs": 247.501
+    },
+    "profileLoad": {
+      "wallMs": 35.93020100000001,
+      "cpuMs": 38.489
+    },
+    "profileRead": {
+      "samples": 1280,
+      "meanMs": 0.011282789062500242,
+      "p50Ms": 0.008448000000043976,
+      "p95Ms": 0.012899000000004435,
+      "maxMs": 1.7222879999999918
+    },
+    "memoryWrite": {
+      "samples": 384,
+      "meanMs": 0.08340712760416731,
+      "p50Ms": 0.04060399999997344,
+      "p95Ms": 0.10690299999998842,
+      "maxMs": 8.14047899999997
+    },
+    "memoryRead": {
+      "samples": 1280,
+      "meanMs": 0.0038558226562502183,
+      "p50Ms": 0.0021700000000350883,
+      "p95Ms": 0.008551999999951931,
+      "maxMs": 0.05690900000001875
+    },
+    "simulation": {
+      "samples": 100,
+      "meanMs": 9.55451244999999,
+      "p50Ms": 6.49976700000002,
+      "p95Ms": 23.348725999999942,
+      "maxMs": 85.42211699999984,
+      "cpuMs": 1576.259,
+      "dispatches": 2600,
+      "lastMetrics": {
+        "players": 128,
+        "characters": 200,
+        "detailed": 200,
+        "dispatches": 0,
+        "coarse": 0,
+        "encounters": 0
+      }
+    },
+    "perceptionPublicEventIngestion": {
+      "samples": 128,
+      "meanMs": 0.22725273437499993,
+      "p50Ms": 0.15028699999993478,
+      "p95Ms": 0.42403699999999844,
+      "maxMs": 2.491991999999982,
+      "accepted": 128,
+      "scope": "Événements publics et connaissances, témoins synthétiques; validation géométrique/GTA non mesurée"
+    },
+    "perceptionObservation": {
+      "samples": 1280,
+      "meanMs": 0.0029952523437497547,
+      "p50Ms": 0.002372000000150365,
+      "p95Ms": 0.003348999999843727,
+      "maxMs": 0.27443499999981213,
+      "accepted": 1280,
+      "scope": "Filtres réels identité/distance/bucket et provenance; instantanés serveur synthétiques, aucune ligne de vue GTA mesurée"
+    },
+    "perceptionPublication": {
+      "samples": 128,
+      "meanMs": 0.8388363828125271,
+      "p50Ms": 0.7266740000000027,
+      "p95Ms": 1.56823200000008,
+      "maxMs": 3.1413290000000416,
+      "accepted": 128,
+      "scope": "Publication transactionnelle, mémoire, relation et ingestion publique réelles; preuve gameplay synthétique"
+    },
+    "backup": {
+      "wallMs": 7.426527000000078,
+      "cpuMs": 7.405
+    }
+  },
+  "totals": {
+    "wallMs": 1578.036806,
+    "cpuMs": 2125.52,
+    "storageBytes": 5877760,
+    "storageStatistics": {
+      "records": 6162,
+      "payloadBytes": 4747278
+    },
+    "peakRssBytes": 110215168,
+    "eventLoopDelayMaxMs": 370.671615
+  },
+  "limits": [
+    "Aucun FXServer, native GTA, WebRTC réseau ou appel OpenAI.",
+    "Joueurs, positions, peds et accusés de tâches synthétiques; moteurs et SQLite réels.",
+    "Charge mono-processus locale; quotas hôte inconnus; aucun engagement FPS ou capacité serveur.",
+    "Le pic de retard de boucle inclut les écritures synchrones et le peuplement initial."
+  ]
+}

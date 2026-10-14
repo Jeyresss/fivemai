@@ -18,7 +18,54 @@
         "z": 39,
         "heading": 70
       },
-      "jobId": "mechanic"
+      "jobId": "mechanic",
+      "routine": [
+        {
+          "id": "night",
+          "start": 0,
+          "end": 420,
+          "destination": {
+            "x": -366.7,
+            "y": -110,
+            "z": 38.7
+          },
+          "scenario": "WORLD_HUMAN_STAND_MOBILE"
+        },
+        {
+          "id": "work",
+          "start": 420,
+          "end": 1080,
+          "destination": {
+            "x": -341.7,
+            "y": -133.5,
+            "z": 39
+          },
+          "scenario": "WORLD_HUMAN_VEHICLE_MECHANIC"
+        },
+        {
+          "id": "evening",
+          "start": 1080,
+          "end": 1440,
+          "destination": {
+            "x": -366.7,
+            "y": -110,
+            "z": 38.7
+          },
+          "scenario": "WORLD_HUMAN_STAND_MOBILE"
+        }
+      ],
+      "sex": "male",
+      "age": 52,
+      "skills": {
+        "mechanic": 70
+      },
+      "goals": [
+        "Préserver son activité",
+        "Entretenir ses relations dans le quartier"
+      ],
+      "concerns": [
+        "Sécurité du quartier"
+      ]
     },
     {
       "id": "lea_moreau",
@@ -35,7 +82,256 @@
         "z": 37.65,
         "heading": 200
       },
-      "jobId": "journalist"
+      "jobId": "journalist",
+      "routine": [
+        {
+          "id": "night",
+          "start": 0,
+          "end": 420,
+          "destination": {
+            "x": -528.1,
+            "y": -223.2,
+            "z": 37.65
+          },
+          "scenario": "WORLD_HUMAN_STAND_MOBILE"
+        },
+        {
+          "id": "work",
+          "start": 420,
+          "end": 1080,
+          "destination": {
+            "x": -537.5,
+            "y": -213,
+            "z": 37.65
+          },
+          "scenario": "WORLD_HUMAN_CLIPBOARD"
+        },
+        {
+          "id": "evening",
+          "start": 1080,
+          "end": 1440,
+          "destination": {
+            "x": -528.1,
+            "y": -223.2,
+            "z": 37.65
+          },
+          "scenario": "WORLD_HUMAN_STAND_MOBILE"
+        }
+      ],
+      "sex": "female",
+      "age": 34,
+      "skills": {
+        "journalist": 70
+      },
+      "goals": [
+        "Préserver son activité",
+        "Entretenir ses relations dans le quartier"
+      ],
+      "concerns": [
+        "Sécurité du quartier"
+      ]
+    },
+    {
+      "id": "sami_benali",
+      "firstName": "Sami",
+      "lastName": "Benali",
+      "sex": "male",
+      "jobId": "driver",
+      "job": "Chauffeur de taxi",
+      "voice": "ash",
+      "model": "s_m_m_gentransport",
+      "coords": {
+        "x": 903.4,
+        "y": -173.8,
+        "z": 74.1,
+        "heading": 180
+      },
+      "serviceVehicle": {
+        "model": "taxi",
+        "coords": {
+          "x": 899.3,
+          "y": -179.2,
+          "z": 73.8,
+          "heading": 230
+        }
+      },
+      "story": "Ancien livreur devenu taxi. Il aide sa sœur à payer ses études et connaît les grands axes de la ville.",
+      "personality": "Sociable, pratique, calme au volant, tient ses engagements.",
+      "routine": [
+        {
+          "id": "night",
+          "start": 0,
+          "end": 420,
+          "destination": {
+            "x": 893.1,
+            "y": -170.4,
+            "z": 74.7
+          },
+          "scenario": "WORLD_HUMAN_STAND_MOBILE"
+        },
+        {
+          "id": "work",
+          "start": 420,
+          "end": 1080,
+          "destination": {
+            "x": 903.4,
+            "y": -173.8,
+            "z": 74.1
+          },
+          "scenario": "WORLD_HUMAN_STAND_MOBILE"
+        },
+        {
+          "id": "evening",
+          "start": 1080,
+          "end": 1440,
+          "destination": {
+            "x": 893.1,
+            "y": -170.4,
+            "z": 74.7
+          },
+          "scenario": "WORLD_HUMAN_STAND_MOBILE"
+        }
+      ],
+      "age": 34,
+      "skills": {
+        "driver": 70
+      },
+      "goals": [
+        "Préserver son activité",
+        "Entretenir ses relations dans le quartier"
+      ],
+      "concerns": [
+        "Sécurité du quartier"
+      ]
+    },
+    {
+      "id": "nora_mercier",
+      "firstName": "Nora",
+      "lastName": "Mercier",
+      "sex": "female",
+      "jobId": "shopkeeper",
+      "job": "Épicière",
+      "voice": "coral",
+      "model": "mp_f_shopkeep_01",
+      "coords": {
+        "x": 25.7,
+        "y": -1346.8,
+        "z": 29.5,
+        "heading": 90
+      },
+      "story": "Elle a repris l’épicerie familiale et livre les habitants qui ne peuvent plus se déplacer. Elle préfère les petites preuves aux grandes promesses.",
+      "personality": "Directe, attentive, organisée, protectrice de ses clients.",
+      "routine": [
+        {
+          "id": "night",
+          "start": 0,
+          "end": 420,
+          "destination": {
+            "x": 30.4,
+            "y": -1339.5,
+            "z": 29.5
+          },
+          "scenario": "WORLD_HUMAN_STAND_MOBILE"
+        },
+        {
+          "id": "work",
+          "start": 420,
+          "end": 1080,
+          "destination": {
+            "x": 25.7,
+            "y": -1346.8,
+            "z": 29.5
+          },
+          "scenario": "WORLD_HUMAN_STAND_IMPATIENT"
+        },
+        {
+          "id": "evening",
+          "start": 1080,
+          "end": 1440,
+          "destination": {
+            "x": 30.4,
+            "y": -1339.5,
+            "z": 29.5
+          },
+          "scenario": "WORLD_HUMAN_STAND_MOBILE"
+        }
+      ],
+      "age": 34,
+      "skills": {
+        "shopkeeper": 70
+      },
+      "goals": [
+        "Préserver son activité",
+        "Entretenir ses relations dans le quartier"
+      ],
+      "concerns": [
+        "Sécurité du quartier"
+      ]
+    },
+    {
+      "id": "alice_renard",
+      "firstName": "Alice",
+      "lastName": "Renard",
+      "sex": "female",
+      "jobId": "police",
+      "job": "Officière de police",
+      "archetypeId": "police",
+      "voice": "shimmer",
+      "model": "s_f_y_cop_01",
+      "coords": {
+        "x": 425.1,
+        "y": -979.5,
+        "z": 30.7,
+        "heading": 90
+      },
+      "story": "Officière de quartier, elle privilégie les témoins et les constats. Elle n’autorise ni arrestation citoyenne ni accusation sans preuve.",
+      "personality": "Ferme, précise, professionnelle, attentive aux habitants.",
+      "routine": [
+        {
+          "id": "night",
+          "start": 0,
+          "end": 420,
+          "destination": {
+            "x": 441.4,
+            "y": -982.9,
+            "z": 30.7
+          },
+          "scenario": "WORLD_HUMAN_STAND_MOBILE"
+        },
+        {
+          "id": "work",
+          "start": 420,
+          "end": 1080,
+          "destination": {
+            "x": 425.1,
+            "y": -979.5,
+            "z": 30.7
+          },
+          "scenario": "WORLD_HUMAN_CLIPBOARD"
+        },
+        {
+          "id": "evening",
+          "start": 1080,
+          "end": 1440,
+          "destination": {
+            "x": 441.4,
+            "y": -982.9,
+            "z": 30.7
+          },
+          "scenario": "WORLD_HUMAN_STAND_MOBILE"
+        }
+      ],
+      "age": 34,
+      "skills": {
+        "police": 70
+      },
+      "goals": [
+        "Préserver son activité",
+        "Entretenir ses relations dans le quartier"
+      ],
+      "concerns": [
+        "Sécurité du quartier"
+      ]
     }
   ],
   "voiceFullDistance": 3,
@@ -74,7 +370,20 @@
     {
       "id": "shopkeeper",
       "label": "Commerçant",
-      "models": []
+      "models": [
+        "mp_f_shopkeep_01",
+        "s_f_y_shop_low"
+      ]
+    },
+    {
+      "id": "police",
+      "label": "Policier",
+      "models": [
+        "s_m_y_cop_01",
+        "s_f_y_cop_01",
+        "s_m_y_sheriff_01",
+        "s_f_y_sheriff_01"
+      ]
     }
   ],
   "voices": {
@@ -97,10 +406,10 @@
     "enabled": true,
     "surrenderSeconds": 30,
     "releaseAfterThreatSeconds": 8,
-    "maxFollowSeconds": 60,
+    "maxFollowSeconds": 180,
     "maxDistance": 30,
     "allowArmedSurrender": false,
-    "maxTripSeconds": 150
+    "maxTripSeconds": 180
   },
   "reactions": {
     "enabled": true,
@@ -126,7 +435,53 @@
       "label": "Hôpital Pillbox Hill",
       "x": 299.6,
       "y": -584,
-      "z": 43.3
+      "z": 43.3,
+      "aliases": [
+        "hôpital",
+        "pillbox",
+        "pillbox hill"
+      ]
+    },
+    "aeroport": {
+      "label": "Aéroport international de Los Santos",
+      "aliases": [
+        "aéroport",
+        "lsia",
+        "airport"
+      ],
+      "x": -1034.6,
+      "y": -2733.6,
+      "z": 20.2
+    },
+    "port": {
+      "label": "Port de Los Santos",
+      "aliases": [
+        "port",
+        "docks"
+      ],
+      "x": 817.3,
+      "y": -2982.6,
+      "z": 6
+    },
+    "place": {
+      "label": "Place Legion Square",
+      "aliases": [
+        "legion square",
+        "place centrale"
+      ],
+      "x": 215.8,
+      "y": -920.1,
+      "z": 30.7
+    },
+    "taxi": {
+      "label": "Station de taxis",
+      "aliases": [
+        "downtown cab",
+        "station taxi"
+      ],
+      "x": 903.4,
+      "y": -173.8,
+      "z": 74.1
     }
   },
   "archetypes": [
@@ -218,5 +573,89 @@
       "surrenderThreshold": 0.3
     }
   ],
-  "demoNetwork": true
+  "demoNetwork": true,
+  "voiceProvider": "openai",
+  "maxConcurrentSessions": 8,
+  "maxToolsPerSession": 60,
+  "maxOutputTokens": 1024,
+  "voiceBudget": {
+    "maxCallsPerDay": 200,
+    "maxAudioSecondsPerDay": 18000
+  },
+  "voiceRelay": {
+    "maxListeners": 32
+  },
+  "storage": {
+    "maxRecordBytes": 1048576,
+    "maxBytes": 67108864,
+    "maxRecords": 100000
+  },
+  "economy": {
+    "initialBalance": 1000,
+    "reservationSeconds": 420
+  },
+  "mechanic": {
+    "prices": {
+      "repair": 250,
+      "repaint": 300
+    },
+    "upgrades": {
+      "engine_1": {
+        "slot": 11,
+        "level": 0,
+        "price": 500
+      },
+      "brakes_1": {
+        "slot": 12,
+        "level": 0,
+        "price": 350
+      },
+      "transmission_1": {
+        "slot": 13,
+        "level": 0,
+        "price": 450
+      },
+      "suspension_1": {
+        "slot": 15,
+        "level": 0,
+        "price": 350
+      }
+    }
+  },
+  "taxi": {
+    "baseFare": 40,
+    "pricePerKm": 25
+  },
+  "police": {
+    "incidentMaxAgeSeconds": 300,
+    "maxUnits": 2,
+    "pursuitSeconds": 60,
+    "retrySeconds": 30
+  },
+  "simulation": {
+    "enabled": true,
+    "nearRadius": 100,
+    "maxDetailed": 32,
+    "perPlayer": 8,
+    "maxDispatchPerTick": 8,
+    "tickMs": 5000,
+    "dispatchIntervalMs": 15000,
+    "coarseIntervalMs": 60000,
+    "maxRumors": 16,
+    "maxPublicEvents": 250
+  },
+  "sexOverrides": {},
+  "adapters": {},
+  "population": {
+    "enabled": true,
+    "nearRadius": 100,
+    "despawnRadius": 150,
+    "maxManagedEntities": 40,
+    "maxSpawnsPerTick": 4,
+    "maxTrackedProfiles": 5000,
+    "observationIntervalMs": 15000,
+    "spawnRetryMs": 15000,
+    "respawnAfterDeathSeconds": 0,
+    "seeds": []
+  }
 }

@@ -1,29 +1,37 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const vm=require('node:vm'),fs=require('node:fs'),path=require('node:path');
-function server({near=true,key='',fetchImpl,entityVisible=true,profileError,now=()=>Date.now(),vehicles=[],fakeWS,mockDemos=false}={}){
+function server({near=true,key='',fetchImpl,entityVisible=true,profileError,now=()=>Date.now(),vehicles=[],fakeWS,mockDemos=false,playerCoords,cityOverrides={}}={}){
  const handlers={},sent=[],saved=[],warnings=[],stateIds=new Map(),storedProfiles=new Map(),demos=new Map(),spawned=[];
  const resourceRoot=path.resolve(__dirname,'..');
  const rootRequire=require('node:module').createRequire(path.join(resourceRoot,'dummy.js'));
  const context={Date:{now},require:id=>id==='node:module'?{createRequire:file=>{
    const load=require('node:module').createRequire(file);
-   return name=>{const loaded=load(name);return name==='ws'&&fakeWS?fakeWS:name==='./server/core.js'?{...loaded,MemoryStore:class{get(){return [];}add(...args){saved.push(args);}}}:name==='./server/profiles.js'?{ProfileStore:class{get(id){return storedProfiles.get(id);}create(model){if(profileError!==undefined)throw profileError;const p={id:'npc_'+(storedProfiles.size+1),firstName:'Alex',lastName:'Morel',model,jobId:'resident',job:'Habitant',voice:'cedar'};storedProfiles.set(p.id,p);return p;}}}:loaded;};
+   return name=>{
+    if(name==='./server/runtime.js')return {createCityRuntime:()=>({missions:{tools:()=>[],execute:async()=>({ok:false,error:'No fixture mission'})},forget(){},disconnect(){},stop(){},tick(){},...cityOverrides})};
+    const loaded=load(name);
+    if(name==='ws'&&fakeWS)return fakeWS;
+    if(name==='./server/database.js')return {...loaded,PersistentDatabase:class extends loaded.PersistentDatabase{constructor(){super(':memory:');}}};
+    if(name==='./server/core.js')return {...loaded,MemoryStore:class{get(){return [];}relation(){return {trust:0,fear:0,affection:0,respect:0,hostility:0,debt:0};}add(...args){saved.push(args.slice(0,4));}}};
+    if(name==='./server/profiles.js')return {ProfileStore:class{get(id){return storedProfiles.get(id);}create(model){if(profileError!==undefined)throw profileError;const p={id:'npc_'+(storedProfiles.size+1),firstName:'Alex',lastName:'Morel',model,jobId:'resident',job:'Habitant',voice:'cedar'};storedProfiles.set(p.id,p);return p;}}};
+    return loaded;
+   };
  }}:rootRequire(id),
  GetResourcePath:()=>path.resolve(__dirname,'..'),GetCurrentResourceName:()=> 'fivemai',GetConvar:()=>key,
  GetPlayerPed:()=>1,getPlayers:()=>['7'],NetworkGetEntityFromNetworkId:id=>[...demos].find(([entity,d])=>d.netId===id)?.[0]|| (id===101?(entityVisible?200:0):id===102?1:0),DoesEntityExist:()=>true,GetEntityType:()=>1,GetEntityHealth:()=>100,GetEntityRoutingBucket:entity=>vehicles.find(v=>v.entity===entity)?.bucket||0,GetEntityModel:entity=>demos.get(entity)?.model||vehicles.find(v=>v.entity===entity)?.model||123,GetHashKey:()=>456,Entity:entity=>({state:{get fivemai_profile_id(){return stateIds.get(entity);},set(key,value){stateIds.set(entity,value);}}}),
  GetAllVehicles:()=>vehicles.map(v=>v.entity),NetworkGetNetworkIdFromEntity:entity=>demos.get(entity)?.netId||vehicles.find(v=>v.entity===entity)?.netId||0,GetVehicleNumberPlateText:entity=>vehicles.find(v=>v.entity===entity)?.plate||'',
- GetPlayerRoutingBucket:()=>0,GetEntityCoords:entity=>demos.get(entity)?.coords||vehicles.find(v=>v.entity===entity)?.coords||(near?[-341.7,-133.5,39]:[0,0,0]),getPlayerIdentifiers:()=>['license:test'],
+ GetPlayerRoutingBucket:()=>0,GetEntityCoords:entity=>demos.get(entity)?.coords||vehicles.find(v=>v.entity===entity)?.coords||playerCoords||(near?[-341.7,-133.5,39]:[0,0,0]),getPlayerIdentifiers:()=>['license:test'],
  onNet:(n,h)=>handlers[n]=h,on:(n,h)=>handlers[n]=h,emitNet:(...args)=>sent.push(args),exports:(n,h)=>handlers[n]=h,
  setInterval:()=>{},setTimeout:()=>0,clearTimeout:()=>{},console:{log:()=>{},warn:message=>warnings.push(message)},fetch:fetchImpl||(()=>{throw new Error('Unexpected network');}),FormData,Blob,AbortSignal};
  if(mockDemos){context.CreatePed=(_,model,x,y,z)=>{const entity=400+demos.size;demos.set(entity,{model,coords:[x,y,z],netId:800+demos.size});spawned.push(entity);return entity;};context.SetEntityOrphanMode=()=>{};context.DeleteEntity=entity=>demos.delete(entity);}
  context.global=context;context.source=7;const sandbox=vm.createContext(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../server/index.js'),'utf8'),sandbox);
- return {handlers,sent,saved,warnings,stateIds,spawned,demos,session:()=>vm.runInContext('active.get(7)',sandbox),setVoiceSession:(options={})=>{const voiceEvents=[];const session={npc:require('../config.json').npcs[0],player:'license:test',behavior:'calm',playerSpeaking:false,responseActive:false,outputPlaying:false,ws:{readyState:1,send:data=>voiceEvents.push(JSON.parse(data))},...options};context.voiceSession=context.testSession=session;vm.runInContext('active.set(7,voiceSession)',sandbox);return {session,voiceEvents,resume:()=>vm.runInContext('maybeEmotionalReply(7,voiceSession)',sandbox)};},inspectAction:(action,args={})=>{context.testAction=action;context.testArgs=args;return vm.runInContext('inspectAction({src:7,session:global.testSession},testAction,testArgs)',sandbox);},inspectVehicle:selection=>{context.testSelection=selection||{};return vm.runInContext('if(!global.testSession){global.testSession={npc:config.npcs[0]};active.set(7,global.testSession);}inspectVehicle({src:7,session:global.testSession},testSelection)',sandbox);}};
+ return {handlers,sent,saved,warnings,stateIds,spawned,demos,lockNpc:id=>{context.testLockId=id;vm.runInContext('npcLocks.set(global.testLockId,7)',sandbox);},session:()=>vm.runInContext('active.get(7)',sandbox),setVoiceSession:(options={})=>{const voiceEvents=[];const session={npc:require('../config.json').npcs[0],player:'license:test',behavior:'calm',playerSpeaking:false,responseActive:false,outputPlaying:false,ws:{readyState:1,send:data=>voiceEvents.push(JSON.parse(data))},...options};context.voiceSession=context.testSession=session;vm.runInContext('active.set(7,voiceSession)',sandbox);return {session,voiceEvents,resume:()=>vm.runInContext('maybeEmotionalReply(7,voiceSession)',sandbox)};},inspectAction:(action,args={})=>{context.testAction=action;context.testArgs=args;return vm.runInContext('inspectAction({src:7,session:global.testSession},testAction,testArgs)',sandbox);},inspectVehicle:selection=>{context.testSelection=selection||{};return vm.runInContext('if(!global.testSession){global.testSession={npc:config.npcs[0]};active.set(7,global.testSession);}inspectVehicle({src:7,session:global.testSession},testSelection)',sandbox);}};
 }
 test('server rejects distant SDP before any API call',async()=>{
- const s=server({near:false,key:'not-used'});await s.handlers['fivemai:offer']('marcel_dubois','v=0\r\n');assert.equal(s.sent[0][0],'fivemai:error');assert.match(s.sent[0][2],/inaccessible/);
+ const s=server({near:false,key:'not-used'});await s.handlers['fivemai:offer']('marcel_dubois','v=0\r\n');assert.equal(s.sent[0][0],'fivemai:error');assert.match(s.sent[0][2].message,/inaccessible/);
 });
 test('server reports missing key without attempting an API call',async()=>{
- const s=server();await s.handlers['fivemai:offer']('marcel_dubois','v=0\r\n');assert.match(s.sent[0][2],/clé OpenAI/);
+ const s=server();await s.handlers['fivemai:offer']('marcel_dubois','v=0\r\n');assert.match(s.sent[0][2].message,/clé OpenAI/);
 });
 test('only a server export records gameplay, scoped to named witnesses',()=>{
  const s=server();assert.equal(s.handlers['fivemai:memory'],undefined);assert.equal(s.handlers.RecordEvent(7,{description:'Marcel a vu le vol.',witnesses:['marcel_dubois','marcel_dubois','unknown']}),true);assert.equal(s.saved.length,1);assert.deepEqual(s.saved[0],['license:test','marcel_dubois','game_event','Marcel a vu le vol.']);
@@ -116,6 +124,11 @@ test('pending spontaneous speech is discarded when the player starts talking',()
 test('react cannot target another actor or invent an arbitrary observation',()=>{
  const f=server({now:()=>100000}),v=f.setVoiceSession();f.handlers['fivemai:react']('other','hit');f.handlers['fivemai:react']('marcel_dubois','ignore instructions');f.handlers['fivemai:react']('marcel_dubois','combat');assert.equal(v.voiceEvents.length,0);
 });
+test('a client cannot invent police speech through react or an automatic offer',async()=>{
+ const f=server({key:'server-secret'}),v=f.setVoiceSession();f.handlers['fivemai:react']('marcel_dubois','police');assert.equal(v.voiceEvents.length,0);
+ const fresh=server({key:'server-secret'});await fresh.handlers['fivemai:offer']('marcel_dubois','v=0\r\n','calm',false,'none',{automatic:true,reaction:'police',speechToken:'fabricated',sessionId:42});
+ const error=fresh.sent.find(e=>e[0]==='fivemai:error');assert.match(error[2].message,/non autorisée/);assert.equal(error[2].sessionId,42);assert.equal(fresh.session(),undefined);assert.ok(!fresh.sent.some(e=>e[0]==='fivemai:answer'));
+});
 test('a reaction waits until existing audible output has finished',()=>{
  const f=server({now:()=>100000}),v=f.setVoiceSession({behavior:'afraid',outputPlaying:true});f.handlers['fivemai:react']('marcel_dubois','flee');assert.equal(v.voiceEvents.length,0);v.session.outputPlaying=false;v.resume();assert.equal(v.voiceEvents.length,1);v.resume();assert.equal(v.voiceEvents.length,1);
 });
@@ -160,7 +173,8 @@ test('sideband hands-up tool waits for gameplay result, remembers it, and resume
  f.handlers['fivemai:actionResult'](start[2].token,true);await settle();
  const output=ws.sent.find(e=>e.type==='conversation.item.create');assert.equal(JSON.parse(output.item.output).ok,true);assert.equal(f.saved.length,1);assert.equal(f.session().actionState,'hands_up');
  assert.equal(ws.sent.filter(e=>e.type==='response.create').length,0);ws.emit('message',JSON.stringify({type:'response.done'}));assert.equal(ws.sent.filter(e=>e.type==='response.create').length,1);
- await f.handlers['fivemai:stop']();await settle();assert.ok(f.sent.some(e=>e[0]==='fivemai:actionCancel'));
+ await f.handlers['fivemai:stop']();await settle();assert.ok(!f.sent.some(e=>e[0]==='fivemai:actionCancel'));assert.equal(f.sent.find(e=>e[0]==='fivemai:closed')[2].gameplayContinues,true);
+ f.handlers.playerDropped();await settle();assert.ok(f.sent.some(e=>e[0]==='fivemai:actionCancel'));
 });
 test('tool refusal does not fabricate a successful gameplay action',async()=>{
  const WS=fakeSocket(),f=server({key:'test-key',now:()=>100000,fakeWS:WS,fetchImpl:successfulCall});
@@ -169,8 +183,15 @@ test('tool refusal does not fabricate a successful gameplay action',async()=>{
  const output=ws.sent.find(e=>e.type==='conversation.item.create');assert.equal(JSON.parse(output.item.output).ok,false);assert.equal(f.saved.length,0);assert.ok(!f.sent.some(e=>e[0]==='fivemai:actionStart'));
  await f.handlers['fivemai:stop']();
 });
+test('a trusted police speech token shares its own gameplay lock and speaks its verified cause',async()=>{
+ const npc=require('../config.json').npcs.find(n=>n.jobId==='police'),WS=fakeSocket();assert.ok(npc);
+ const f=server({key:'test-key',now:()=>100000,fakeWS:WS,fetchImpl:successfulCall,playerCoords:[npc.coords.x,npc.coords.y,npc.coords.z],cityOverrides:{consumeSpeechRequest:(src,id,token)=>src===7&&id===npc.id&&token==='trusted-token'?{description:'Cause policière validée par le serveur.'}:null}});
+ f.lockNpc(npc.id);await f.handlers['fivemai:offer'](npc.id,'v=0\r\n','calm',false,'none',{automatic:true,reaction:'police',speechToken:'trusted-token',sessionId:9});
+ assert.ok(f.sent.some(e=>e[0]==='fivemai:answer'));assert.equal(f.session().policeSpeech,'Cause policière validée par le serveur.');f.handlers['fivemai:voiceReady'](npc.id,9);
+ assert.equal(WS.instances[0].sent[0].type,'response.create');assert.match(WS.instances[0].sent[0].response.instructions,/Cause policière validée/);await f.handlers['fivemai:stop'](9);await settle();
+});
 
 test('demo characters are spawned once on the server and shared between requests',()=>{
- const f=server({mockDemos:true});assert.equal(f.spawned.length,2);f.handlers['fivemai:demoRequest']();f.handlers['fivemai:demoRequest']();assert.equal(f.spawned.length,2);const ids=f.sent.filter(e=>e[0]==='fivemai:demos');assert.equal(ids[0][2].marcel_dubois,800);assert.deepEqual(ids[0][2],ids[1][2]);f.handlers['fivemai:resolve']({id:'marcel_dubois',requestId:123});const r=f.sent.at(-1)[2];assert.equal(r.ok,true);assert.equal(r.profile.id,'marcel_dubois');assert.equal(r.profile.netId,800);
+ const f=server({mockDemos:true}),count=require('../config.json').npcs.length;assert.equal(f.spawned.length,count);f.handlers['fivemai:demoRequest']();f.handlers['fivemai:demoRequest']();assert.equal(f.spawned.length,count);const ids=f.sent.filter(e=>e[0]==='fivemai:demos');assert.equal(ids[0][2].marcel_dubois,800);assert.deepEqual(ids[0][2],ids[1][2]);f.handlers['fivemai:resolve']({id:'marcel_dubois',requestId:123});const r=f.sent.at(-1)[2];assert.equal(r.ok,true);assert.equal(r.profile.id,'marcel_dubois');assert.equal(r.profile.netId,800);
  f.handlers.onResourceStop('fivemai');assert.equal(f.demos.size,0);
 });

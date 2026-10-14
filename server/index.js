@@ -10,19 +10,38 @@ const {enrichFixed}=resourceRequire('./server/archetypes.js');
 const {validReaction,reactionResponse}=resourceRequire('./server/reactions.js');
 const {NPCActionManager}=resourceRequire('./server/actions.js');
 const {ProfileStore}=resourceRequire('./server/profiles.js');
+const {PersistentDatabase}=resourceRequire('./server/database.js');
+const {SharedVoiceRelay}=resourceRequire('./server/voice.js');
+const {OpenAIRealtimeProvider,ProviderRegistry}=resourceRequire('./server/provider.js');
+const {RequestLimiter,VoiceBudget,safeArguments,finitePosition}=resourceRequire('./server/security.js');
+const {createCityRuntime}=resourceRequire('./server/runtime.js');
 const config=JSON.parse(fs.readFileSync(path.join(root,'config.json'),'utf8'));
+// Overrides are server-only and never exposed in the NUI resource files.
+const overrideFile=path.join(root,'config.local.json');
+if(fs.existsSync(overrideFile))Object.assign(config,JSON.parse(fs.readFileSync(overrideFile,'utf8')));
+config.interactionDistance=Number(config.interactionDistance)||4;
+config.maxSessionSeconds=Math.max(10,Math.min(600,Number(config.maxSessionSeconds)||180));
+const db=new PersistentDatabase(path.join(root,'data','fivemai.sqlite'),{legacyProfiles:path.join(root,'data','profiles.json'),legacyMemory:path.join(root,'data','memory.json'),...(config.storage||{})});
+const limiter=new RequestLimiter(),budget=new VoiceBudget({db,config:config.voiceBudget});
+const serviceSessions=new Map();
+function gameplaySession(src){return active.get(src)||serviceSessions.get(src);}
+
 for(const file of ['profiles.json','memory.json'])backupData(path.join(root,'data',file));
-const memory=new MemoryStore(path.join(root,'data','memory.json'));
-const profiles=new ProfileStore(path.join(root,'data','profiles.json'),{jobs:config.jobs,maxProfiles:config.maxProfiles,archetypes:config.archetypes,voices:config.voices});
+const memory=new MemoryStore(path.join(root,'data','memory.json'),{db});
+const profiles=new ProfileStore(path.join(root,'data','profiles.json'),{db,jobs:config.jobs,maxProfiles:config.maxProfiles,archetypes:config.archetypes,voices:config.voices,sexOverrides:config.sexOverrides});
 const autoCooldown=new Map(),demoPeds=new Map();
 const bindings=new Map(), npcLocks=new Map(), active=new Map(), cooldown=new Map(), resolveCooldown=new Map();
 const key=()=>GetConvar('fivemai_openai_key','');
+const providers=new ProviderRegistry(new OpenAIRealtimeProvider({key,WebSocket,fetchImpl:(...args)=>fetch(...args),model:config.model}));
+exports('RegisterVoiceProvider',provider=>{providers.register(provider);return true;});
+const sharedVoice=new SharedVoiceRelay({getPlayers,position,nearby,emit:(event,src,data)=>emitNet(event,src,data),fullDistance:config.voiceFullDistance||3,maxDistance:config.voiceMaxDistance||18,maxListeners:config.voiceRelay?.maxListeners||64,ownerValid:(src,npc,token)=>active.get(Number(src))?.voiceToken===token});
+onNet('fivemai:voiceFrame',data=>sharedVoice.acceptFrame(Number(global.source),data));
 function identity(src) { return getPlayerIdentifiers(String(src)).find(x=>x.startsWith('license:')); }
 const jobs=new JobRegistry(),pendingJobs=new Map();
 function inspectVehicle(ctx,selection={}){
   if(ctx.session.actionState)throw new Error('Terminez l’action du PNJ avant une intervention');
   if(ctx.session.behavior&&ctx.session.behavior!=='calm')throw new Error('Ce PNJ fuit ou se bat et ne peut pas effectuer un service');
-  if(active.get(ctx.src)!==ctx.session||!nearby(ctx.src,ctx.session.npc,15))throw new Error('Restez près du mécanicien');
+  if(gameplaySession(ctx.src)!==ctx.session||!nearby(ctx.src,ctx.session.npc,15))throw new Error('Restez près du mécanicien');
   const npcPos=position(ctx.session.npc),playerPed=GetPlayerPed(String(ctx.src));
   const [px,py,pz]=GetEntityCoords(playerPed),bucket=GetPlayerRoutingBucket(String(ctx.src));
   const candidates=[];
@@ -37,10 +56,11 @@ function inspectVehicle(ctx,selection={}){
   return selectVehicle(candidates,selection);
 }
 function inspectAction(ctx,action,args){
- if(active.get(ctx.src)!==ctx.session||!nearby(ctx.src,ctx.session.npc,10))throw new Error('Restez près de ce PNJ');
+ if(gameplaySession(ctx.src)!==ctx.session||!nearby(ctx.src,ctx.session.npc,10))throw new Error('Restez près de ce PNJ');
  if([...pendingJobs.values()].some(p=>p.ctx.session===ctx.session))throw new Error('Une intervention métier est en cours');
  const o=ctx.session.observation||{};
  if(action==='hands_up')return {aimed:o.aimed===true,armed:o.armed===true,at:o.at||0};
+ if(action==='go_to'){if(!Object.hasOwn(config.destinations||{},args.destination))throw new Error('Destination configurée requise');return {destination:config.destinations[args.destination]};}
  if(!['approach_vehicle','enter_vehicle','drive'].includes(action))return {};
  if(action==='drive'&&!Object.hasOwn(config.destinations||{},args.destination))throw new Error('Destinations disponibles: '+Object.keys(config.destinations||{}).join(', '));
  const npcPos=position(ctx.session.npc),bucket=GetPlayerRoutingBucket(String(ctx.src));
@@ -55,14 +75,15 @@ function inspectAction(ctx,action,args){
  return vehicle.needsPlate?vehicle:{vehicleNetId:vehicle.netId,plate:vehicle.plate,...(action==='drive'?{destination:config.destinations[args.destination]}:{})};
 }
 const actions=new NPCActionManager({config:config.actions,now:()=>Date.now(),inspect:inspectAction,send:(src,event,data)=>emitNet(event,src,data),changed:s=>pushBehavior(s),remember:(ctx,text)=>memory.add(ctx.session.player,ctx.session.npc.id,'action',text)});
-function sessionTools(npc){return [...actions.tools(npc.jobId),...jobs.tools(npc.jobId)];}
+function sessionTools(npc){return [...actions.tools(npc.jobId).filter(tool=>tool.name!=='driver_trip'),...jobs.tools(npc.jobId),...(city?.missions.tools(npc.id)||[])];}
 onNet('fivemai:actionResult',(token,ok,reason)=>{
- const src=Number(global.source),s=active.get(src);if(!s)return;
+ const src=Number(global.source),s=gameplaySession(src)||city?.gameplayFor?.(src,token);if(!s)return;
  if(ok===true&&!nearby(src,s.npc,35))return actions.result(src,token,false,'distance');
  actions.result(src,token,ok===true,reason);
 });
 onNet('fivemai:actionEnded',(token,reason)=>{
- const src=Number(global.source),s=active.get(src),running=s&&actions.running.get(s);
+ const actor=Number(global.source);if(city?.actionFinished?.(actor,token,reason))return;
+ const src=Number(global.source),s=gameplaySession(src),running=s&&actions.running.get(s);
  if(!running||running.token!==token)return;
  let text='L’action du PNJ est terminée ou interrompue.';
  if(running.action==='drive'&&reason==='arrived'){
@@ -73,7 +94,7 @@ onNet('fivemai:actionEnded',(token,reason)=>{
  if(s.ws?.readyState===WebSocket.OPEN)s.ws.send(JSON.stringify({type:'conversation.item.create',item:{type:'message',role:'system',content:[{type:'input_text',text}]}}));
 });
 onNet('fivemai:observation',(npcId,o)=>{
- const src=Number(global.source),s=active.get(src);
+ const src=Number(global.source),s=active.get(src);if(!limiter.take(src,'observation',{count:8,windowMs:1000}))return;
  if(!s||s.npc.id!==npcId||!o||!nearby(src,s.npc,35))return;
  s.observation={aimed:o.aimed===true,armed:o.armed===true,hit:o.hit===true,at:Date.now()};
 });
@@ -90,7 +111,8 @@ const mechanic=new MechanicJob({inspect:inspectVehicle,
   pending.timer=setTimeout(()=>finishJob(token,{ok:false,error:'Le mécanicien n’a pas atteint le capot'}),20000);
   emitNet('fivemai:jobStart',ctx.src,{token,netId:quote.vehicle.netId,npcId:ctx.session.npc.id,npcNetId:ctx.session.npc.netId,service:quote.service,plate:quote.vehicle.plate});
  }),remember:(ctx,text)=>memory.add(ctx.session.player,ctx.session.npc.id,'service',text)});
-jobs.register(mechanic);
+// The complete job registry is initialized below, after server helpers exist.
+
 exports('RegisterJob',job=>{jobs.register(job);return true;});
 onNet('fivemai:jobArrived',(token,success,reason)=>{
  const src=Number(global.source),pending=pendingJobs.get(token);
@@ -109,7 +131,7 @@ onNet('fivemai:jobArrived',(token,success,reason)=>{
     pending.stage='applying';
     pending.timer=setTimeout(()=>finishJob(token,{ok:false,error:'Application du service non confirmée'}),8000);
     const {ctx,quote}=pending;
-    emitNet('fivemai:jobApply',src,{token,npcId:ctx.session.npc.id,netId:quote.vehicle.netId,service:quote.service,colour:quote.colour});
+    emitNet('fivemai:jobApply',src,{token,npcId:ctx.session.npc.id,netId:quote.vehicle.netId,service:quote.service,colour:quote.colour,upgrade:quote.upgrade});
    }catch(e){finishJob(token,{ok:false,error:errorMessage(e)});}
   },4000);
  }catch(e){finishJob(token,{ok:false,error:errorMessage(e)});}
@@ -139,7 +161,7 @@ function position(npc){
 function npcBucket(npc){const entity=npc.netId?networkPed(npc.netId):0;return npc.netId?(entity?GetEntityRoutingBucket(entity):-1):0;}
 function nearby(src,npc,limit=config.interactionDistance+1) {
   const ped=GetPlayerPed(String(src)),coords=position(npc);
-  if(!ped||!coords||GetPlayerRoutingBucket(String(src))!==npcBucket(npc))return false;
+  if(!ped||GetEntityHealth(ped)<=0||!coords||(npc.netId&&GetEntityHealth(networkPed(npc.netId))<=0)||GetPlayerRoutingBucket(String(src))!==npcBucket(npc))return false;
   const [x,y,z]=GetEntityCoords(ped);
   return distance({x,y,z},coords)<=limit;
 }
@@ -148,12 +170,13 @@ function boundProfile(netId){
   if(!entity||!binding||binding.entity!==entity||Entity(entity).state.fivemai_profile_id!==binding.id)return null;
   const profile=profiles.get(binding.id)||config.npcs.find(n=>n.id===binding.id);return profile?{...profile,netId}:null;
 }
-on('entityRemoved',entity=>{for(const [netId,binding]of bindings)if(binding.entity===entity)bindings.delete(netId);});
+on('entityRemoved',entity=>{city?.population?.entityRemoved(entity);for(const [netId,binding]of bindings)if(binding.entity===entity)bindings.delete(netId);});
 function lookup(id){
-  const fixed=config.npcs.find(n=>n.id===id);if(fixed){const demo=demoPeds.get(id);return {...enrichFixed(fixed,config),...(demo&&DoesEntityExist(demo.entity)?{netId:demo.netId}:{})};}
+  const fixed=config.npcs.find(n=>n.id===id);if(fixed){const demo=demoPeds.get(id);return {...(profiles.get(id)||enrichFixed(fixed,config)),...(demo&&DoesEntityExist(demo.entity)?{netId:demo.netId}:{})};}
   for(const netId of bindings.keys()){const npc=boundProfile(netId);if(npc?.id===id)return npc;}
   return null;
 }
+let city;
 function spawnDemos(){
  if(!config.demoNetwork||typeof CreatePed!=='function')return;
  for(const npc of config.npcs){
@@ -166,8 +189,11 @@ function spawnDemos(){
  }
 }
 onNet('fivemai:demoRequest',()=>{
+ if(!limiter.take(Number(global.source),'demoRequest',{count:2,windowMs:10000}))return;
  spawnDemos();emitNet('fivemai:demos',Number(global.source),Object.fromEntries([...demoPeds].map(([id,ped])=>[id,ped.netId])));
 });
+for(const npc of config.npcs){if(profiles.upsertFixed)profiles.upsertFixed(npc);}
+city=createCityRuntime({db,config,profiles,memory,jobs,actions,active,serviceSessions,npcLocks,identity,lookup,position,npcBucket,nearby,inspectVehicle,inspectAction,applyVehicle:mechanic.apply,finishJob,pendingJobs,limiter,emit:(event,src,data)=>emitNet(event,src,data),onNet,on,exports,getPlayers,bindProfile,game:{CreatePed:typeof CreatePed==='function'?CreatePed:null,SetEntityRoutingBucket:typeof SetEntityRoutingBucket==='function'?SetEntityRoutingBucket:null,GetPlayerPed,GetEntityCoords,GetPlayerRoutingBucket,GetEntityRoutingBucket,DoesEntityExist,GetEntityHealth,NetworkGetEntityFromNetworkId,GetEntityModel,GetAllVehicles,NetworkGetNetworkIdFromEntity,GetVehicleNumberPlateText,GetEntityType,Entity,CreateVehicle:typeof CreateVehicle==='function'?CreateVehicle:null,SetEntityOrphanMode:typeof SetEntityOrphanMode==='function'?SetEntityOrphanMode:null,DeleteEntity:typeof DeleteEntity==='function'?DeleteEntity:null,GetPedInVehicleSeat:typeof GetPedInVehicleSeat==='function'?GetPedInVehicleSeat:null,GetVehicleEngineHealth:typeof GetVehicleEngineHealth==='function'?GetVehicleEngineHealth:null,GetVehicleBodyHealth:typeof GetVehicleBodyHealth==='function'?GetVehicleBodyHealth:null,GetEntitySpeed:typeof GetEntitySpeed==='function'?GetEntitySpeed:null,GetVehiclePedIsIn:typeof GetVehiclePedIsIn==='function'?GetVehiclePedIsIn:null,SetEntityCoords:typeof SetEntityCoords==='function'?SetEntityCoords:null,RegisterCommand:typeof RegisterCommand==='function'?RegisterCommand:null,SetEntityHealth:typeof SetEntityHealth==='function'?SetEntityHealth:null,GetPlayerName:typeof GetPlayerName==='function'?GetPlayerName:null}});
 spawnDemos();
 onNet('fivemai:resolve',target=>{
   const src=Number(global.source),requestId=target?.requestId;
@@ -194,7 +220,7 @@ onNet('fivemai:resolve',target=>{
         const profile=profiles.create(model,job?.id,target.sex);
         stage='association du profil au PNJ';
         bindings.set(target.netId,{id:profile.id,entity});Entity(entity).state.set('fivemai_profile_id',profile.id,true);
-        npc={...profile,netId:target.netId};
+        npc={...profile,netId:target.netId};city?.registerAmbient?.(profile,{x,y,z},{netId:target.netId,entity,bucket:GetEntityRoutingBucket(entity),owned:false});
       }
     }
     if(npc?.netId&&profiles.get(npc.id)&&profiles.ensureAppearance)npc={...profiles.ensureAppearance(npc.id,target.sex),netId:npc.netId};
@@ -208,28 +234,32 @@ onNet('fivemai:resolve',target=>{
   }
 });
 // Trusted spawn scripts can reattach a saved character after recreating its ped.
-exports('BindNPCProfile',(netId,profileId)=>{
+function bindProfile(netId,profileId){
   const entity=networkPed(netId);if(!entity||!profiles.get(profileId))return false;
   for(const [other,binding]of bindings)if(other!==netId&&binding.id===profileId)bindings.delete(other);
   bindings.set(netId,{id:profileId,entity});Entity(entity).state.set('fivemai_profile_id',profileId,true);return true;
-});
+}
+exports('BindNPCProfile',bindProfile);
 exports('GetNPCProfile',profileId=>{const npc=profiles.get(profileId)||lookup(profileId);return npc?JSON.parse(JSON.stringify(npc)):null;});
 exports('AssignNPCJob',(profileId,jobId)=>{
   const job=config.jobs?.find(j=>j.id===jobId)||jobs.jobs.get(jobId);
   if(!job||npcLocks.has(profileId)||!profiles.get(profileId))return false;
   profiles.assignJob(profileId,jobId,job.label);return true;
 });
-async function stop(src) {
-  const s=active.get(src); if (!s) return;
-  for(const [token,pending]of pendingJobs)if(pending.ctx.src===src)finishJob(token,{ok:false,error:'Conversation terminée'});
-  actions.stop(s);mechanic.forget(s);active.delete(src); if(npcLocks.get(s.npc.id)===src)npcLocks.delete(s.npc.id);clearTimeout(s.timer); s.ws?.close();
-  emitNet('fivemai:closed',src);
+async function stop(src,reason='voice_closed',expectedSession) {
+  const s=active.get(src)||serviceSessions.get(src); if (!s||(expectedSession!==undefined&&s.uiSession!==expectedSession)) return;
+  const force=['disconnect','bucket','gone','resource'].includes(reason);
+  const busy=actions.running.has(s)||[...actions.pending.values()].some(p=>p.ctx.session===s)||[...pendingJobs.values()].some(p=>p.ctx.session===s);
+  if(busy&&!force)serviceSessions.set(src,s);else serviceSessions.delete(src);
+  for(const [token,pending]of pendingJobs)if(force&&pending.ctx.src===src)finishJob(token,{ok:false,error:'Conversation terminée'});
+  if(force||!busy){actions.stop(s);city?.forget(s);}active.delete(src);if((force||!busy)&&!city?.ownsGameplayLock?.(s.npc.id)&&npcLocks.get(s.npc.id)===src)npcLocks.delete(s.npc.id);clearTimeout(s.timer);sharedVoice.remove(s.voiceToken);budget.finish(s.budgetReservation);s.ws?.close();
+  emitNet('fivemai:closed',src,{sessionId:s.uiSession,reason,gameplayContinues:busy&&!force});
   if (s.callId) {
-    try { await fetch(`https://api.openai.com/v1/realtime/calls/${s.callId}/hangup`,{method:'POST',headers:{Authorization:`Bearer ${key()}`},signal:AbortSignal.timeout(10000)}); }
+    try { await (s.provider||providers.get()).close(s.callId); }
     catch { console.warn('[fivemai] Impossible de confirmer la fermeture OpenAI.'); }
   }
 }
-function sessionInstructions(s){return `Action réelle en cours: ${s.actionState||'aucune'}. Destinations chauffeur autorisées: ${JSON.stringify(config.destinations||{})}. `+sessionConfig(config,s.npc,[...memory.get('world',s.npc.id).slice(-10),...memory.get(s.player,s.npc.id).slice(-20)],sessionTools(s.npc),s.behavior,s.behaviorCause).instructions;}
+function sessionInstructions(s){const relation=memory.relation?.(s.player,s.npc.id)||{};return `${s.policeSpeech||''} Relation validée: ${JSON.stringify(relation)}. Mission active: ${JSON.stringify(city?.missions.status?.(s.player)||{})}. `+ `Action réelle en cours: ${s.actionState||'aucune'}. Destinations chauffeur autorisées: ${JSON.stringify(config.destinations||{})}. `+sessionConfig(config,s.npc,[...memory.get('world',s.npc.id).slice(-10),...(city?.publicMemory?.(s.npc.id)||[]),...memory.get(s.player,s.npc.id).slice(-20)],sessionTools(s.npc),s.behavior,s.behaviorCause).instructions;}
 function maybeEmotionalReply(src,s){
  if(active.get(src)!==s||(!s.emotionReplyPending&&!s.pendingReaction)||s.voiceReady===false||s.awaitingBehaviorUpdate||s.responseActive||s.outputPlaying||s.playerSpeaking||s.toolTurn?.pending||s.toolTurn?.outputs||s.ws?.readyState!==WebSocket.OPEN)return;
  const reaction=s.pendingReaction;s.pendingReaction=null;s.emotionReplyPending=false;s.responseActive=true;
@@ -241,11 +271,13 @@ function pushBehavior(s){
  s.ws.send(JSON.stringify({type:'session.update',session:{type:'realtime',instructions:sessionInstructions(s)}}));
 }
 onNet('fivemai:speaking',speaking=>{
+ if(!limiter.take(Number(global.source),'speaking',{count:12,windowMs:1000}))return;
  const s=active.get(Number(global.source));if(!s)return;
  s.playerSpeaking=speaking===true;s.lastActivity=Date.now();if(s.playerSpeaking)s.automatic=false;if(s.playerSpeaking){s.emotionReplyPending=false;s.pendingReaction=null;}
 });
 onNet('fivemai:behavior',(npcId,state,speaking,cause='none')=>{
  const src=Number(global.source),s=active.get(src);
+ if(!limiter.take(src,'behavior',{count:6,windowMs:1000}))return;
  if(!s||s.npc.id!==npcId||!validBehavior(state)||!validBehaviorCause(cause)||!nearby(src,s.npc,50)||(s.behavior===state&&(s.behaviorCause||'none')===cause))return;
  s.behavior=state;s.behaviorCause=cause;s.playerSpeaking=speaking===true;
  if(s.playerSpeaking)s.pendingReaction=null;
@@ -259,13 +291,13 @@ onNet('fivemai:behavior',(npcId,state,speaking,cause='none')=>{
   if(s.outputPlaying)s.ws.send(JSON.stringify({type:'output_audio_buffer.clear'}));
  }
 });
-onNet('fivemai:voiceReady',npcId=>{
- const src=Number(global.source),s=active.get(src);if(!s||s.npc.id!==npcId)return;
+onNet('fivemai:voiceReady',(npcId,uiSession)=>{
+ const src=Number(global.source),s=active.get(src);if(!s||s.npc.id!==npcId||(uiSession!==undefined&&s.uiSession!==uiSession))return;
  s.voiceReady=true;maybeEmotionalReply(src,s);
 });
 onNet('fivemai:react',(npcId,kind)=>{
  const src=Number(global.source),s=active.get(src);
- if(config.reactions?.enabled===false||!s||s.npc.id!==npcId||!validReaction(kind)||!nearby(src,s.npc,config.voiceMaxDistance||18)||s.playerSpeaking)return;
+ if(config.reactions?.enabled===false||!s||s.npc.id!==npcId||!validReaction(kind)||kind==='police'||!nearby(src,s.npc,config.voiceMaxDistance||18)||s.playerSpeaking)return;
  if(Date.now()-(s.lastReactionAt||0)<(config.reactions?.cooldownSeconds||8)*1000)return;
  const allowed=kind==='aim'?s.observation?.aimed===true&&Date.now()-s.observation.at<2000:kind==='hit'?(s.behaviorCause==='hit'||s.observation?.hit===true&&Date.now()-s.observation.at<2000):kind==='flee'?['afraid','afraid_player'].includes(s.behavior):['angry','combat'].includes(s.behavior);
  if(!allowed)return;
@@ -274,49 +306,42 @@ onNet('fivemai:react',(npcId,kind)=>{
 });
 onNet('fivemai:offer',async (npcId,sdp,behavior='calm',speaking=false,cause='none',observation={})=>{
   const src=Number(global.source);
+  const replyError=message=>emitNet('fivemai:error',src,{message,sessionId:observation?.sessionId});
+  if(!limiter.take(src,'offer',{count:2,windowMs:10000}))return emitNet('fivemai:error',src,{message:'Attendez avant de relancer une conversation.',sessionId:observation?.sessionId});
   let npc=lookup(npcId);
-  if(npc?.netId&&observation?.netId&&npc.netId!==observation.netId)return emitNet('fivemai:error',src,'Identité réseau du PNJ incorrecte.');
+  if(npc?.netId&&observation?.netId&&npc.netId!==observation.netId)return replyError('Identité réseau du PNJ incorrecte.');
   const fixed=config.npcs.find(n=>n.id===npcId);
-  if(npc&&fixed)npc={...enrichFixed(fixed,config,observation?.sex),...(npc.netId?{netId:npc.netId}:{})};
+  if(npc&&fixed)npc={...(profiles.get(npcId)||enrichFixed(fixed,config,observation?.sex)),...(npc.netId?{netId:npc.netId}:{})};
   if(npc&&!npc.netId&&observation?.netId){
    const entity=networkPed(observation.netId);
-   if(!entity||GetEntityModel(entity)>>>0!==modelHash(npc.model)||GetEntityRoutingBucket(entity)!==GetPlayerRoutingBucket(String(src)))return emitNet('fivemai:error',src,'PNJ de démonstration pas encore synchronisé. Réessayez.');
+   if(!entity||GetEntityModel(entity)>>>0!==modelHash(npc.model)||GetEntityRoutingBucket(entity)!==GetPlayerRoutingBucket(String(src)))return replyError('PNJ de démonstration pas encore synchronisé. Réessayez.');
    const [x,y,z]=GetEntityCoords(entity);
-   if(bindings.get(observation.netId)?.id!==npc.id&&distance({x,y,z},npc.coords)>config.interactionDistance+1)return emitNet('fivemai:error',src,'PNJ de démonstration invalide.');
+   if(bindings.get(observation.netId)?.id!==npc.id&&distance({x,y,z},npc.coords)>config.interactionDistance+1)return replyError('PNJ de démonstration invalide.');
    bindings.set(observation.netId,{id:npc.id,entity});Entity(entity).state.set('fivemai_profile_id',npc.id,true);npc={...npc,netId:observation.netId};
   }
   const automatic=observation?.automatic===true;
-  if(automatic&&(config.reactions?.enabled===false||!validReaction(observation.reaction)))return emitNet('fivemai:error',src,'Réaction automatique invalide.');
-  if (!npc || typeof sdp!=='string' || sdp.length>40000 || !sdp.startsWith('v=0') || !nearby(src,npc)) return emitNet('fivemai:error',src,'PNJ inaccessible ou requête invalide.');
-  if(npcLocks.has(npc.id))return emitNet('fivemai:error',src,'Ce PNJ est déjà en conversation.');
-  if (active.size>=8 || active.has(src) || (automatic?Date.now()-(autoCooldown.get(src)||0)<(config.reactions?.autoCooldownSeconds||15)*1000:Date.now()-(cooldown.get(src)||0)<10000)) return emitNet('fivemai:error',src,'Attendez avant de relancer une conversation.');
+  const policeSpeech=automatic&&observation.reaction==='police'?city?.consumeSpeechRequest?.(src,npcId,observation.speechToken):null;
+  if(observation?.reaction==='police'&&!policeSpeech)return emitNet('fivemai:error',src,{message:'Demande vocale policière non autorisée.',sessionId:observation?.sessionId});
+  if(automatic&&(config.reactions?.enabled===false||!validReaction(observation.reaction)))return replyError('Réaction automatique invalide.');
+  if (!npc || typeof sdp!=='string' || sdp.length>40000 || !sdp.startsWith('v=0') || !nearby(src,npc)) return replyError('PNJ inaccessible ou requête invalide.');
+  if(npcLocks.has(npc.id)&&!(policeSpeech&&npcLocks.get(npc.id)===src))return replyError('Ce PNJ est déjà en conversation.');
+  if (active.size>=(config.maxConcurrentSessions||8) || active.has(src) || serviceSessions.has(src) || (automatic?Date.now()-(autoCooldown.get(src)||0)<(config.reactions?.autoCooldownSeconds||15)*1000:Date.now()-(cooldown.get(src)||0)<10000)) return replyError('Attendez avant de relancer une conversation.');
   const player=identity(src);
-  if (!player || !key()) return emitNet('fivemai:error',src,'Identifiant joueur ou clé OpenAI serveur manquante.');
+  if (!player || !providers.get(config.voiceProvider||'openai').available()) return replyError('Identifiant joueur ou clé OpenAI serveur manquante.');
   (automatic?autoCooldown:cooldown).set(src,Date.now());
   const initialBehavior=validBehavior(behavior)?behavior:'calm';
-  const s={npc,player,behavior:initialBehavior,behaviorCause:validBehaviorCause(cause)?cause:'none',playerSpeaking:speaking===true,responseActive:false,outputPlaying:false,emotionReplyPending:false,awaitingBehaviorUpdate:false,callId:null,ws:null,timer:null,remembered:new Set(),automatic,voiceReady:false,lastActivity:Date.now(),pendingReaction:automatic?observation.reaction:null,lastReactionAt:automatic?Date.now():0,observation:{aimed:observation?.aimed===true,armed:observation?.armed===true,hit:observation?.hit===true,at:Date.now()}}; active.set(src,s);npcLocks.set(npc.id,src);
+  let reservation;try{reservation=budget.reserve(config.maxSessionSeconds);}catch(e){return emitNet('fivemai:error',src,{message:errorMessage(e),sessionId:observation?.sessionId});}
+  const s={src,uiSession:observation?.sessionId,budgetReservation:reservation,provider:providers.get(config.voiceProvider||'openai'),npc,player,behavior:initialBehavior,behaviorCause:validBehaviorCause(cause)?cause:'none',playerSpeaking:speaking===true,responseActive:false,outputPlaying:false,emotionReplyPending:false,awaitingBehaviorUpdate:false,callId:null,ws:null,timer:null,remembered:new Set(),automatic,voiceReady:false,lastActivity:Date.now(),pendingReaction:automatic?observation.reaction:null,lastReactionAt:automatic?Date.now():0,observation:{aimed:observation?.aimed===true,armed:observation?.armed===true,hit:observation?.hit===true,at:Date.now()}}; active.set(src,s);npcLocks.set(npc.id,src);city?.routineCancel?.(npc.id);
+  if(policeSpeech)s.policeSpeech=policeSpeech.description;
   s.timer=setTimeout(()=>void stop(src),config.maxSessionSeconds*1000);
   try {
-    const body=new FormData();
-    // The API expects form fields, not uploaded files with filenames.
-    body.set('sdp',sdp);
     const realtimeConfig=sessionConfig(config,npc,[...memory.get('world',npc.id).slice(-10),...memory.get(player,npc.id).slice(-20)],sessionTools(npc),s.behavior,s.behaviorCause);
-    realtimeConfig.instructions=sessionInstructions(s);
-    body.set('session',JSON.stringify(realtimeConfig));
-    const result=await fetch('https://api.openai.com/v1/realtime/calls',{method:'POST',headers:{Authorization:`Bearer ${key()}`},body,signal:AbortSignal.timeout(20000)});
-    if (!result.ok) throw await openAIError(result,key());
-    const answer=await result.text();
-    const location=result.headers.get('location')||'';
-    s.callId=location.split('/').pop();
-    if (!/^rtc_[A-Za-z0-9_-]+$/.test(s.callId)) throw new Error('Identifiant appel OpenAI absent');
-    if (active.get(src)!==s) {
-      await fetch(`https://api.openai.com/v1/realtime/calls/${s.callId}/hangup`,{method:'POST',headers:{Authorization:`Bearer ${key()}`},signal:AbortSignal.timeout(10000)});
-      return;
-    }
-    // Sideband: memory tool calls are processed on the authenticated server connection.
-    s.ws=new WebSocket(`wss://api.openai.com/v1/realtime?call_id=${encodeURIComponent(s.callId)}`,{headers:{Authorization:`Bearer ${key()}`},handshakeTimeout:10000});
+    realtimeConfig.instructions=sessionInstructions(s);realtimeConfig.max_output_tokens=config.maxOutputTokens||1024;
+    const {answer,callId}=await s.provider.open(sdp,realtimeConfig);s.callId=callId;
+    if(active.get(src)!==s){await s.provider.close(s.callId);return;}
+    s.ws=s.provider.socket(s.callId);
     await new Promise((resolve,reject)=>{s.ws.once('open',resolve);s.ws.once('error',reject);});
-    s.ws.on('error',()=>{emitNet('fivemai:error',src,'Connexion mémoire interrompue.');void stop(src);});
+    s.ws.on('error',()=>{if(active.get(src)!==s)return;emitNet('fivemai:error',src,{message:'Connexion mémoire interrompue.',sessionId:s.uiSession});void stop(src,'voice_closed',s.uiSession);});
     s.ws.on('close',()=>{if(active.get(src)===s) void stop(src);});
     if (active.get(src)!==s) { s.ws.close(); return; }
     const toolTurn=new ToolTurnCoordinator(()=>{if(active.get(src)===s&&s.ws.readyState===WebSocket.OPEN){s.emotionReplyPending=false;s.responseActive=true;s.ws.send(JSON.stringify({type:'response.create'}));}});
@@ -328,17 +353,20 @@ onNet('fivemai:offer',async (npcId,sdp,behavior='calm',speaking=false,cause='non
         if(event.type==='response.created'){s.responseActive=true;toolTurn.created();return;}
         if(event.type==='session.updated'){s.awaitingBehaviorUpdate=false;maybeEmotionalReply(src,s);return;}
         if(event.type==='output_audio_buffer.started'){s.outputPlaying=true;return;}
-        if(event.type==='output_audio_buffer.stopped'||event.type==='output_audio_buffer.cleared'){s.outputPlaying=false;maybeEmotionalReply(src,s);return;}
+        if(event.type==='output_audio_buffer.stopped'||event.type==='output_audio_buffer.cleared'){if(event.type==='output_audio_buffer.cleared')sharedVoice.clear(s.voiceToken);s.outputPlaying=false;maybeEmotionalReply(src,s);return;}
         if(event.type==='response.done'){s.responseActive=false;toolTurn.done();maybeEmotionalReply(src,s);return;}
         if(event.type!=='response.function_call_arguments.done'||s.remembered.has(event.call_id))return;
         s.remembered.add(event.call_id);toolTurn.begin();
         let output;
         try{
-          if(s.remembered.size>20)throw new Error('Limite d’outils atteinte pour cette session');
-          const args=JSON.parse(event.arguments);
+          if(s.remembered.size>(config.maxToolsPerSession||60))throw new Error('Limite d’outils atteinte pour cette session');
+          if(s.automatic&&event.name!=='remember_memory')throw new Error('Une réaction spontanée ne peut déclencher un service');
+          const args=safeArguments(event.arguments);
           if(event.name==='remember_memory'){
-            memory.add(player,npc.id,'conversation',args.memory);output={saved:true};
-          }else if(['npc_action','driver_trip'].includes(event.name)){
+            memory.add(player,npc.id,'conversation',args.memory,{provenance:args.provenance||'player_declaration',source:'conversation'});output={saved:true};
+          }else if(event.name.startsWith('mission_')){
+            output=await city.missions.execute(event.name,{src,player,session:s},args);
+          }else if(event.name==='npc_action'){
             output=await actions.execute(event.name,{src,session:s},args);
           }else{
             output=await jobs.execute(npc.jobId,event.name,{src,session:s},args);
@@ -350,22 +378,22 @@ onNet('fivemai:offer',async (npcId,sdp,behavior='calm',speaking=false,cause='non
       }catch{console.warn('[fivemai] Événement outil illisible.');}
     });
     if(s.behavior!==initialBehavior||s.behaviorCause!==cause)pushBehavior(s);
-    emitNet('fivemai:answer',src,answer);
+    s.voiceToken=sharedVoice.add(src,npc);emitNet('fivemai:voiceOwner',src,{token:s.voiceToken,npcId:npc.id,sessionId:s.uiSession});
+    emitNet('fivemai:answer',src,{sdp:answer,sessionId:s.uiSession});
   } catch(e) {
     console.warn(`[fivemai] ${e.message}`);
-    emitNet('fivemai:error',src,'Connexion OpenAI impossible. Consultez la console serveur.');
-    await stop(src);
+    if(active.get(src)===s){emitNet('fivemai:error',src,{message:'Connexion OpenAI impossible. Consultez la console serveur.',sessionId:s.uiSession});await stop(src,'voice_closed',s.uiSession);}
   }
 });
-onNet('fivemai:stop',()=>void stop(Number(global.source)));
-on('playerDropped',()=>{const src=Number(global.source);void stop(src);cooldown.delete(src);autoCooldown.delete(src);resolveCooldown.delete(src);});
+onNet('fivemai:stop',uiSession=>void stop(Number(global.source),'voice_closed',uiSession));
+on('playerDropped',()=>{const src=Number(global.source);void stop(src,'disconnect');city?.disconnect(src);limiter.forget(src);cooldown.delete(src);autoCooldown.delete(src);resolveCooldown.delete(src);});
 // Hearing range controls client volume, not the lifetime of the current reply.
 setInterval(()=>{for(const [src,s] of active){
   const coords=position(s.npc);
   if(s.automatic&&!s.playerSpeaking&&!s.responseActive&&!s.outputPlaying&&!s.actionState&&Date.now()-s.lastActivity>(config.reactions?.idleSeconds||30)*1000){void stop(src);continue;}
-  if(!GetPlayerPed(String(src)) || !coords || GetPlayerRoutingBucket(String(src))!==npcBucket(s.npc))void stop(src);
+  if(!GetPlayerPed(String(src)) || !coords || GetPlayerRoutingBucket(String(src))!==npcBucket(s.npc))void stop(src,!coords?'gone':'bucket');
   else if(s.npc.netId)emitNet('fivemai:position',src,coords);
-}},1000);
+}sharedVoice.tick();city?.tick();},1000);
 // Server-only export. Trusted gameplay scripts choose actual witnesses.
 exports('RecordEvent',(playerSource,event)=>{
   const src=Number(playerSource), player=identity(src);
@@ -378,14 +406,14 @@ exports('RecordEvent',(playerSource,event)=>{
   }
   return true;
 });
-on('onResourceStop',name=>{if(name!==GetCurrentResourceName())return;for(const src of active.keys())void stop(src);for(const {entity}of demoPeds.values())if(DoesEntityExist(entity)&&typeof DeleteEntity==='function')DeleteEntity(entity);});
+on('onResourceStop',name=>{if(name!==GetCurrentResourceName())return;for(const src of new Set([...active.keys(),...serviceSessions.keys()]))void stop(src,'resource');city?.stop();setTimeout(()=>{try{db.close();}catch(e){console.warn(errorMessage(e));}},0);for(const {entity}of demoPeds.values())if(DoesEntityExist(entity)&&typeof DeleteEntity==='function')DeleteEntity(entity);});
 
 exports('RecordNPCEvent',(npcId,description)=>{
  if(!lookup(npcId)&&!profiles.get(npcId))return false;
- memory.add('world',npcId,'observation',description);
+ memory.add('world',npcId,'observation',description);city?.simulation.recordPublicEvent?.({id:require('node:crypto').randomUUID(),visibility:'public',source:'server_public',description:description.slice(0,600),witnesses:[npcId]});
  for(const s of active.values())if(s.npc.id===npcId&&s.ws?.readyState===WebSocket.OPEN)s.ws.send(JSON.stringify({type:'conversation.item.create',item:{type:'message',role:'system',content:[{type:'input_text',text:`Observation publique fournie par le serveur: ${description}`}]}}));
  return true;
 });
 
 console.log('[fivemai] Serveur prêt — résolution des profils v2.');
-console.log(`[fivemai] Version npc-actions-1 chargée depuis ${root}`);
+console.log(`[fivemai] Version living-city-1 chargée depuis ${root}`);
